@@ -6,24 +6,25 @@ and is hosted on GitHub Pages without a build step.
 
 ## What it does
 
-- **Octas tab:** shows the dome with 0–8 octas of cloud as a slice (an
-  orange cut from horizon to zenith), a vert slice (the orange on its side:
-  180° slices from the north horizon to the south, sliding up from one
-  horizon, over the zenith, to the other), a round patch, a horizon ring, clumps or random patches. The *Deform*
-  controls change the outline while the covered area stays exactly fixed.
+- **Octas tab:** shows the dome with 0–8 octas of cloud in one of three
+  shapes: a horizontal slice (an orange cut from horizon to zenith), a
+  vertical slice (the orange on its side: 180° slices from the north horizon
+  to the south, sliding up from one horizon, over the zenith, to the other)
+  or a round patch. A modifier breaks the shape into cumuli (rounded clumps)
+  or strati (a sheet with gaps); the covered area stays exactly fixed.
 - **Outside / Inside views:** orbit the translucent dome from outside, or
   stand at the observer's position and look around.
 - **All-sky map:** a flat map of the whole dome. In the equal-area
   projection, area on the map is proportional to octas.
-- **Cloud layer tab:** one flat cloud layer in the low, mid or high étage,
-  either cumuliform (separate elements) or stratiform (a sheet with gaps).
-  Coverage is picked in octas as seen on the dome; the clouds are sized to
-  give it. Each étage tints its clouds. The scene is to scale and follows
-  the Earth's curve: an observer with eyes 1.7 m up, a dome whose radius is
-  the distance to their horizon (4.65 km), the ground inside it, and the
-  layer drawn out to the observer's line of sight. The GPU draws the
-  layer's projection on the dome directly, pixel by pixel, from the same
-  random layout used for the octa numbers.
+- **Cloud layer tab:** the same shapes on one flat cloud layer in the low,
+  mid or high étage, broken up by cumuli or strati that sit on the layer
+  itself, so perspective squeezes them toward the horizon. Coverage is
+  picked in octas as seen on the dome and held exactly. Each étage tints its
+  clouds. The scene is to scale and follows the Earth's curve: an observer
+  with eyes 1.7 m up, a dome whose radius is the distance to their horizon
+  (4.65 km), the ground inside it, and the layer drawn out to the observer's
+  line of sight. The GPU draws the layer pixel by pixel from the same fields
+  used for the octa numbers.
 - **Quiz tab:** random skies to estimate, scored using the octa rounding rules.
 - **Notes tab:** the geometry, explained for a beginner observer in Canada.
 

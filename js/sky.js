@@ -102,7 +102,8 @@ export function makeNoise3(seed) {
 
 // ---------------------------------------------------------------- shapes
 //
-// Each shape is a scalar "cloudiness" field over the dome. The cloud is the
+// Each shape (optionally broken up by a modifier texture) is a scalar
+// "cloudiness" field over the dome. The cloud is the
 // region where the field exceeds a threshold, and the threshold is chosen so
 // the covered solid angle is exactly the requested fraction. Adding smooth
 // noise to the field deforms the outline but, because the threshold is
@@ -140,68 +141,88 @@ function vertSliceAngles(azimuth) {
   return psi;
 }
 
-export function computeField(params, out) {
-  const { shape, azimuth, centerElevation, clumps, deform, scale, time, seed } = params;
-  const { az, el, x, y, z } = grid;
+// Shape alone: horizontal slice ('slice'), vertical slice ('lying') or round
+// patch ('cap'). Field values are angles (radians), so a texture added on top
+// shifts the outline by a predictable amount.
+export function shapeField(params, out) {
+  const { shape, azimuth, centerElevation } = params;
+  const { az, x, y, z } = grid;
   const a0 = azimuth * DEG;
-
   if (shape === 'slice') {
     for (let k = 0; k < N; k++) out[k] = -Math.abs(wrapPi(az[k] - a0));
   } else if (shape === 'lying') {
-    // the cloud is the band of slices centred on the chosen turn, kept
-    // inside the dome so it slides up from one horizon and over to the other
-    const half = (params.octas / 8) * (Math.PI / 2);
-    const lift = (params.sliceElevation ?? 0) * DEG;
-    const centre = Math.min(Math.PI - half, Math.max(half, lift + half));
+    const centre = vertSliceCentre(params.octas, params.sliceElevation);
     const psi = vertSliceAngles(azimuth);
     for (let k = 0; k < N; k++) out[k] = -Math.abs(psi[k] - centre);
-  } else if (shape === 'cap') {
+  } else {
     const e0 = centerElevation * DEG;
     const cx = Math.sin(a0) * Math.cos(e0), cy = Math.cos(a0) * Math.cos(e0), cz = Math.sin(e0);
     for (let k = 0; k < N; k++) {
       const d = Math.max(-1, Math.min(1, x[k] * cx + y[k] * cy + z[k] * cz));
       out[k] = -Math.acos(d);
     }
-  } else if (shape === 'band') {
-    for (let k = 0; k < N; k++) out[k] = -el[k];
-  } else if (shape === 'clumps') {
-    const rnd = mulberry32(seed * 7919 + 17);
-    const centers = [];
-    for (let c = 0; c < clumps; c++) {
-      // sin(elevation) uniform => centres spread evenly over the dome's area
-      const e = Math.asin(rnd());
-      const a = rnd() * 2 * Math.PI;
-      centers.push([Math.sin(a) * Math.cos(e), Math.cos(a) * Math.cos(e), Math.sin(e), 0.6 + 0.8 * rnd()]);
-    }
-    for (let k = 0; k < N; k++) {
-      let best = -Infinity;
-      for (const [cx, cy, cz, s] of centers) {
-        const d = Math.max(-1, Math.min(1, x[k] * cx + y[k] * cy + z[k] * cz));
-        const v = -Math.acos(d) / s;
-        if (v > best) best = v;
-      }
-      out[k] = best;
-    }
-  } else {
-    // 'patchy': noise only
-    out.fill(0);
-  }
-
-  const amp = shape === 'patchy' ? 1 : deform;
-  if (amp > 0) {
-    const noise = params.noise;
-    const f = scale;
-    const t = time;
-    for (let k = 0; k < N; k++) {
-      const px = x[k] * f + t * 0.31, py = y[k] * f - t * 0.17, pz = z[k] * f + t * 0.23;
-      const n = noise(px, py, pz) + 0.5 * noise(px * 2.03 + 11, py * 2.03, pz * 2.03) +
-        0.25 * noise(px * 4.1 - 7, py * 4.1, pz * 4.1);
-      out[k] += amp * n;
-    }
   }
   // Break ties (e.g. every cell in one azimuth column of a slice has the same
   // value) so the threshold can split a column and hit the area exactly.
   for (let k = 0; k < N; k++) out[k] += 1e-6 * tieJitter[k];
+  return out;
+}
+
+// A vertical slice's cloud is the band of slices centred on this turn angle,
+// kept on the dome so it slides up from one horizon and over to the other.
+export function vertSliceCentre(octas, sliceElevation = 0) {
+  const half = (octas / 8) * (Math.PI / 2);
+  return Math.min(Math.PI - half, Math.max(half, sliceElevation * DEG + half));
+}
+
+// Rounded clumps scattered over the dome, drifting slowly round the zenith.
+// 1 at a clump's centre, 0 at its edge, down to -1 away from clumps.
+const CLUMPS = 60;
+function clumpTexture(seed, time, out) {
+  const rnd = mulberry32(seed * 7919 + 17);
+  const cl = [];
+  for (let c = 0; c < CLUMPS; c++) {
+    // sin(elevation) uniform => centres spread evenly over the dome's area
+    const e = Math.asin(rnd() * 1.1 - 0.1);
+    const a = rnd() * 2 * Math.PI + time * (0.04 + 0.05 * rnd());
+    const r = (5 + 9 * rnd()) * DEG;
+    cl.push([Math.sin(a) * Math.cos(e), Math.cos(a) * Math.cos(e), Math.sin(e), Math.cos(r)]);
+  }
+  const { x, y, z } = grid;
+  for (let k = 0; k < N; k++) {
+    let best = -1;
+    for (let c = 0; c < CLUMPS; c++) {
+      const [cx, cy, cz, cr] = cl[c];
+      const v = (x[k] * cx + y[k] * cy + z[k] * cz - cr) / (1 - cr);
+      if (v > best) best = v;
+    }
+    out[k] = best;
+  }
+  return out;
+}
+
+// Shape plus modifier, for the Octas tab: 'cumuli' breaks the shape into
+// rounded clumps, 'strati' into a smooth sheet with gaps. `amount` sets how
+// strongly; `time` drifts the texture.
+const texBuf = new Float32Array(N);
+export function computeField(params, out) {
+  shapeField(params, out);
+  const { modifier, amount, time } = params;
+  if (modifier === 'none' || !(amount > 0)) return out;
+  if (modifier === 'cumuli') {
+    clumpTexture(params.seed, time, texBuf);
+    for (let k = 0; k < N; k++) out[k] += amount * texBuf[k];
+    return out;
+  }
+  const { x, y, z } = grid;
+  const noise = params.noise;
+  const f = 3; // feature size of the strati texture
+  for (let k = 0; k < N; k++) {
+    const px = x[k] * f + time * 0.31, py = y[k] * f - time * 0.17, pz = z[k] * f + time * 0.23;
+    const n = noise(px, py, pz) + 0.5 * noise(px * 2.03 + 11, py * 2.03, pz * 2.03) +
+      0.25 * noise(px * 4.1 - 7, py * 4.1, pz * 4.1);
+    out[k] += amount * n;
+  }
   return out;
 }
 

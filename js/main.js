@@ -2,11 +2,9 @@ import * as THREE from 'three';
 import { OrbitControls } from '../vendor/OrbitControls.js';
 import {
   W, H, N, grid, computeField, solveThreshold, coverFromField, bandFractions,
-  reportedOctas, makeNoise3, mulberry32, OCTA_BAND_ELEVATIONS, vertSliceFrame,
+  reportedOctas, makeNoise3, mulberry32, OCTA_BAND_ELEVATIONS, vertSliceFrame, vertSliceCentre,
 } from './sky.js';
-import {
-  castLayer, layerGeometry, sheetField, sheetGeometry, solvePlanCover, distanceToHeight, EARTH_R,
-} from './layer.js';
+import { layerField, distanceToHeight, EARTH_R, LAYER_AMOUNT, P_OCC, ELEMENT_R } from './layer.js';
 
 const DEG = Math.PI / 180;
 const FT = 0.3048; // metres per foot
@@ -15,19 +13,20 @@ const $$ = (s) => [...document.querySelectorAll(s)];
 
 // ================================================================ state
 
+// shape: 'slice' (horizontal slice), 'lying' (vertical slice) or 'cap'
+// (round patch); modifier: 'none', 'cumuli' or 'strati', applied with
+// strength `amount`.
 const shapeParams = {
-  octas: 3, shape: 'slice', azimuth: 0, centerElevation: 90, sliceElevation: 0, clumps: 6,
-  deform: 0.3, scale: 3, time: 0, seed: 1, animate: true, // scale: noise feature size, fixed
+  octas: 3, shape: 'slice', azimuth: 0, centerElevation: 90, sliceElevation: 0,
+  modifier: 'strati', amount: 0.3, time: 0, seed: 1, animate: true,
 };
+// The cloud layer uses the same shapes, broken up by a texture on the layer
+// itself; size is the texture's scale in metres (element spacing or patch
+// size), typical for the étage.
 const layerParams = {
-  etage: 'low', form: 'cumuliform',
-  // octas: the amount seen on the dome; cover: the map-view fraction that
-  // gives it (solved for)
-  // dome or the map-view amount. cover: resulting map-view fraction.
-  octas: 3, cover: 3 / 8,
-  base: 4000 * FT, thickness: 0, size: 1500, extent: 400, // a flat layer
-  curved: true, // Earth curvature: always on
-  seed: 1, showClouds: true,
+  etage: 'low', shape: 'slice', azimuth: 0, centerElevation: 90, sliceElevation: 0,
+  modifier: 'cumuli', octas: 3,
+  base: 4000 * FT, size: 1000, seed: 1, showClouds: true,
 };
 let quizParams = null;
 const quiz = { answered: false, right: 0, total: 0, streak: 0 };
@@ -68,7 +67,6 @@ const field = new Float32Array(N);
 const cover = new Float32Array(N);
 let threshold = 0;
 let coveredFrac = 0;
-let layerGeo = null;
 const noiseCache = new Map();
 const noiseFor = (seed) => {
   if (!noiseCache.has(seed)) noiseCache.set(seed, makeNoise3(seed));
@@ -123,29 +121,47 @@ function domeGeometry(segA = 192, segE = 64) {
 }
 // ---------------------------------------------------------------- layer pattern
 //
-// The cloud layer's pattern is computed per pixel on the GPU, for the dome and
-// the 3D layer alike, from the same random layout the CPU uses for the octa
-// numbers (the hash and noise below copy layer.js and sky.js exactly).
-// Elements: inside a disc of radius r around each lattice point. Sheets:
-// where the noise field exceeds the threshold.
+// The cloud layer is drawn per pixel on the GPU, on the dome and on the 3D
+// layer alike, from the same fields the CPU uses for the octa numbers (see
+// layer.js; the hash and noise below copy layer.js and sky.js exactly).
+// Cloudiness = shape field for the line of sight + amount x the texture where
+// that line of sight meets the layer; cloud where it exceeds layerT.
 const permTexture = new THREE.DataTexture(new Uint8Array(512), 512, 1, THREE.RedFormat, THREE.UnsignedByteType);
 let permSeed = null;
-const patternUniforms = {
-  sheet: { value: 0 },
+const layerUniforms = {
+  shapeKind: { value: 0 }, // 0 horizontal slice, 1 vertical slice, 2 round patch
+  modKind: { value: 1 }, // 0 none, 1 cumuli, 2 strati
   seed: { value: 1 },
-  spacing: { value: 1000 },
-  radius: { value: 0 },
-  occupied: { value: 0.85 },
-  freq: { value: 1 / 1500 },
-  sheetT: { value: 0 },
-  coverMean: { value: 0 },
+  shapeAz: { value: 0 },
+  sliceCentre: { value: 0 },
+  capDir: { value: new THREE.Vector3(0, 0, 1) }, // east, north, up
+  texSize: { value: 1500 },
+  amount: { value: 0.7 },
+  layerT: { value: 0 },
+  layerHeight: { value: 1200 }, // cloud base above the eye, m
   layerFade: { value: 1 }, // fades the clouds out and in when the layer is swapped
   perm: { value: permTexture },
 };
-const PATTERN_GLSL = `
-  uniform int sheet, seed;
-  uniform float spacing, radius, occupied, freq, sheetT, coverMean, layerFade;
+const LAYER_GLSL = `
+  uniform int shapeKind, modKind, seed;
+  uniform float shapeAz, sliceCentre, texSize, amount, layerT, layerHeight, layerFade;
+  uniform vec3 capDir;
   uniform sampler2D perm;
+  const float LPI = 3.141592653589793;
+
+  // sky.js shapeField, for a unit sky direction s = (east, north, up)
+  float region(vec3 s) {
+    if (shapeKind == 0) {
+      float d = mod(atan(s.x, s.y) - shapeAz + LPI, 2.0 * LPI) - LPI;
+      return -abs(d);
+    }
+    if (shapeKind == 1) {
+      vec2 p = vec2(cos(shapeAz), -sin(shapeAz));
+      return -abs(atan(s.z, dot(s.xy, p)) - sliceCentre);
+    }
+    return -acos(clamp(dot(s, capDir), -1.0, 1.0));
+  }
+
   // layer.js hash3
   uvec3 hash3(int ix, int iy) {
     uint h = (uint(ix) * 0x27d4eb2du) ^ (uint(iy) * 0x165667b1u) ^ (uint(seed) * 0x9e3779b1u);
@@ -158,20 +174,20 @@ const PATTERN_GLSL = `
     q ^= q >> 13u;
     return uvec3(h, g, q);
   }
-  // distance from p to the nearest cloud element's edge (negative inside)
-  float elementEdge(vec2 p) {
-    int ix = int(floor(p.x / spacing)), iy = int(floor(p.y / spacing));
-    float best = 1e9;
+  // layer.js cumuliTexture
+  float cumuli(vec2 p) {
+    int ix = int(floor(p.x / texSize)), iy = int(floor(p.y / texSize));
+    float r = ${ELEMENT_R.toFixed(3)} * texSize, best = -1.0;
     for (int ox = -1; ox <= 1; ox++) for (int oy = -1; oy <= 1; oy++) {
       uvec3 h = hash3(ix + ox, iy + oy);
-      if (float(h.x) / 4294967296.0 >= occupied) continue;
-      vec2 c = (vec2(float(ix + ox), float(iy + oy)) + vec2(h.yz) / 4294967296.0) * spacing;
-      best = min(best, length(c - p) - radius);
+      if (float(h.x) / 4294967296.0 >= ${P_OCC.toFixed(3)}) continue;
+      vec2 c = (vec2(float(ix + ox), float(iy + oy)) + vec2(h.yz) / 4294967296.0) * texSize;
+      best = max(best, 1.0 - length(c - p) / r);
     }
     return best;
   }
 
-  // sky.js makeNoise3
+  // sky.js makeNoise3, and layer.js stratiTexture
   int P(int i) { return int(texelFetch(perm, ivec2(i, 0), 0).r * 255.0 + 0.5); }
   float grad(int h, float x, float y, float z) {
     h &= 15;
@@ -194,35 +210,35 @@ const PATTERN_GLSL = `
           mix(grad(P(AB + 1), x, y - 1.0, z - 1.0), grad(P(BB + 1), x - 1.0, y - 1.0, z - 1.0), u), v),
       w);
   }
-  float sheetNoise(vec2 p) {
-    vec2 q = p * freq;
+  float strati(vec2 p) {
+    vec2 q = p / texSize;
     return noise(vec3(q, 0.37)) + 0.45 * noise(vec3(q * 2.3 + vec2(17.0, 0.0), 1.7));
   }
+  float layerTex(vec2 p) { return modKind == 1 ? cumuli(p) : strati(p); }
 
-  // Cloud amount (0..1) at ground point g. ddx, ddy: how far g moves across
-  // one screen pixel. Toward the horizon a pixel covers a long, thin strip of
-  // ground, so it is filtered along its two axes separately: samples are
-  // averaged along the long axis, and only when even the short axis is
-  // bigger than the clouds does the pattern fade to the layer's average.
-  float cloudSample(vec2 g, float w) {
-    return sheet == 1
-      ? smoothstep(sheetT - 0.6 * w * freq, sheetT + 0.6 * w * freq, sheetNoise(g))
-      : 1.0 - smoothstep(-0.6 * w, 0.6 * w, elementEdge(g));
-  }
-  float cloudAt(vec2 g, vec2 ddx, vec2 ddy) {
-    float feature = sheet == 1 ? 0.5 / freq : max(2.0 * radius, 1.0);
+  // Cloud amount (0..1). r, rw: the shape field here and its change across a
+  // pixel. g: where the line of sight meets the layer; ddx, ddy: how far g
+  // moves across one pixel. Toward the horizon a pixel covers a long, thin
+  // strip of the layer, so the texture is averaged along the strip's long
+  // axis, and only where even its short axis outgrows the texture does it
+  // give way to the expected cover.
+  float layerCloud(float r, float rw, vec2 g, vec2 ddx, vec2 ddy) {
+    if (modKind == 0) return smoothstep(layerT - rw, layerT + rw, r) * layerFade;
+    float feature = modKind == 1 ? 2.0 * ${ELEMENT_R.toFixed(3)} * texSize : 0.5 * texSize;
     float lx = length(ddx), ly = length(ddy);
     vec2 major = lx > ly ? ddx : ddy;
     float minor = max(min(lx, ly), 1e-3);
     float k = smoothstep(0.3, 1.0, minor / feature);
+    float w = rw + 1.5 * amount * minor / feature;
     float c = 0.0;
     if (k < 0.999) {
-      // four samples spread along the long axis (they coincide when the
-      // pixel is small, which costs nothing visible)
-      c = 0.25 * (cloudSample(g - 0.375 * major, minor) + cloudSample(g - 0.125 * major, minor)
-                + cloudSample(g + 0.125 * major, minor) + cloudSample(g + 0.375 * major, minor));
+      vec4 f = r + amount * vec4(layerTex(g - 0.375 * major), layerTex(g - 0.125 * major),
+                                 layerTex(g + 0.125 * major), layerTex(g + 0.375 * major));
+      vec4 s = smoothstep(vec4(layerT - w), vec4(layerT + w), f);
+      c = 0.25 * (s.x + s.y + s.z + s.w);
     }
-    return mix(c, coverMean, k) * layerFade;
+    float expected = smoothstep(layerT - amount, layerT + amount, r);
+    return mix(c, expected, k) * layerFade;
   }
 `;
 
@@ -234,10 +250,8 @@ fieldTexture.wrapS = THREE.RepeatWrapping;
 fieldTexture.magFilter = THREE.LinearFilter;
 fieldTexture.minFilter = THREE.LinearFilter;
 const domeUniforms = {
-  ...patternUniforms,
+  ...layerUniforms,
   layerOn: { value: 0 },
-  layerHeight: { value: 1000 }, // cloud base above the eye, m
-  layerReach: { value: 4e5 }, // m
   field: { value: fieldTexture },
   threshold: { value: 0 },
   skyColor: { value: new THREE.Vector3(120 / 255, 170 / 255, 225 / 255) },
@@ -268,24 +282,24 @@ const dome = new THREE.Mesh(
       uniform float threshold, skyAlpha, cloudAlpha;
       uniform vec3 skyColor, cloudColor;
       uniform int layerOn;
-      uniform float layerHeight, layerReach;
       varying vec2 vUv;
       varying vec3 vDir;
       #include <logdepthbuf_pars_fragment>
-      ${PATTERN_GLSL}
+      ${LAYER_GLSL}
       void main() {
         #include <logdepthbuf_fragment>
         float a;
         if (layerOn == 1) {
           // Follow this pixel's line of sight out to the (curved) cloud layer.
-          vec3 d = normalize(vDir);
-          vec2 hor = vec2(d.x, -d.z); // east, north
-          float hl = max(length(hor), 1e-6);
-          float t = max(d.y, 0.0) / hl;
+          vec3 n = normalize(vDir);
+          vec3 s = vec3(n.x, -n.z, n.y); // east, north, up
+          float hl = max(length(s.xy), 1e-6);
+          float t = max(s.z, 0.0) / hl;
           float dist = 2.0 * layerHeight / (t + sqrt(t * t + 2.0 * layerHeight / 6371000.0));
-          vec2 g = hor / hl * dist;
+          vec2 g = s.xy / hl * dist;
           vec2 gx = dFdx(g), gy = dFdy(g);
-          a = (d.y < 0.0 || dist > layerReach) ? 0.0 : cloudAt(g, gx, gy);
+          float r = region(s), rw = fwidth(r);
+          a = s.z < 0.0 ? 0.0 : layerCloud(r, rw, g, gx, gy);
         } else {
           float f = texture2D(field, vUv).r;
           float w = max(fwidth(f), 1e-5);
@@ -342,7 +356,7 @@ function lyingArcs(a0) {
 }
 function guideSpec(g) {
   if (g === 'slices') return { circles: [], meridians: [0, 45, 90, 135, 180, 225, 270, 315], arcs: [] };
-  if (g === 'lying') return { circles: [], meridians: [], arcs: lyingArcs(shapeParams.azimuth) };
+  if (g === 'lying') return { circles: [], meridians: [], arcs: lyingArcs((mode === 'layer' ? layerParams : shapeParams).azimuth) };
   return { circles: [], meridians: [], arcs: [] };
 }
 // fade: crossfade from the old guides (button changes); sliders that move
@@ -505,17 +519,21 @@ const SURFACE_FRAG = `
   #include <logdepthbuf_pars_fragment>
   uniform vec3 color;
   varying vec2 vGround;
-  ${PATTERN_GLSL}
+  ${LAYER_GLSL}
   void main() {
     #include <logdepthbuf_fragment>
-    float a = cloudAt(vGround, dFdx(vGround), dFdy(vGround));
+    // the line of sight from the eye to this point of the (curved) layer
+    float d = length(vGround);
+    vec3 s = normalize(vec3(vGround, layerHeight - d * d / 12742000.0));
+    float r = region(s), rw = fwidth(r);
+    float a = s.z < 0.0 ? 0.0 : layerCloud(r, rw, vGround, dFdx(vGround), dFdy(vGround));
     if (a < 0.01) discard;
     gl_FragColor = vec4(color, 0.95 * a);
   }`;
 const layerSurface = new THREE.Mesh(
   new THREE.BufferGeometry(),
   new THREE.ShaderMaterial({
-    uniforms: { ...patternUniforms, metresPerUnit, color: { value: new THREE.Color(0xeef1f5) } },
+    uniforms: { ...layerUniforms, metresPerUnit, color: { value: new THREE.Color(0xeef1f5) } },
     vertexShader: SURFACE_VERT,
     fragmentShader: SURFACE_FRAG,
     side: THREE.DoubleSide,
@@ -529,34 +547,30 @@ layerSurface.visible = false;
 layerSurface.userData.radius = 0;
 scene.add(layerSurface);
 
-// Point the shared pattern uniforms at the current layer.
+// Point the shared layer uniforms at the current layer.
+let layerThreshold = 0;
 function updatePattern() {
   const p = layerParams;
-  const sheet = p.form === 'stratiform';
-  patternUniforms.sheet.value = sheet ? 1 : 0;
-  patternUniforms.seed.value = p.seed;
-  patternUniforms.coverMean.value = p.cover;
-  if (sheet) {
-    const { perm } = sheetField(p);
-    if (permSeed !== p.seed) {
-      permTexture.image.data.set(perm);
-      permTexture.needsUpdate = true;
-      permSeed = p.seed;
-    }
-    const { T } = sheetGeometry(p);
-    patternUniforms.freq.value = 1 / p.size;
-    patternUniforms.sheetT.value = T === -Infinity ? -1e9 : T;
-  } else {
-    const geo = layerGeometry(p);
-    patternUniforms.spacing.value = geo.s;
-    patternUniforms.radius.value = geo.r;
-    patternUniforms.occupied.value = geo.p;
+  const U = layerUniforms;
+  U.shapeKind.value = { slice: 0, lying: 1, cap: 2 }[p.shape];
+  U.modKind.value = { none: 0, cumuli: 1, strati: 2 }[p.modifier];
+  U.seed.value = p.seed;
+  U.shapeAz.value = p.azimuth * DEG;
+  U.sliceCentre.value = vertSliceCentre(layerOctasShown, p.sliceElevation);
+  const a = p.azimuth * DEG, e = p.centerElevation * DEG;
+  U.capDir.value.set(Math.sin(a) * Math.cos(e), Math.cos(a) * Math.cos(e), Math.sin(e));
+  U.texSize.value = p.size;
+  U.amount.value = LAYER_AMOUNT;
+  U.layerT.value = Math.max(-1e4, Math.min(1e4, layerThreshold));
+  U.layerHeight.value = Math.max(1, p.base - EYE_M);
+  if (permSeed !== p.seed) {
+    permTexture.image.data.set(noiseFor(p.seed).perm);
+    permTexture.needsUpdate = true;
+    permSeed = p.seed;
   }
   const tint = tintFor(p.base);
   domeUniforms.cloudColor.value.set(tint[0] / 255, tint[1] / 255, tint[2] / 255);
   layerSurface.material.uniforms.color.value.setRGB(tint[0] / 255, tint[1] / 255, tint[2] / 255, THREE.SRGBColorSpace);
-  domeUniforms.layerHeight.value = Math.max(1, p.base - EYE_M);
-  domeUniforms.layerReach.value = p.extent * 1000;
 }
 
 function updateCloudMeshes() {
@@ -570,8 +584,8 @@ function updateCloudMeshes() {
   layerSurface.visible = false;
   if (!on) return;
   updatePattern();
-  if (!layerParams.showClouds || layerParams.cover <= 0) return;
-  const reach = Math.min(layerParams.extent * 1000, sightRange(layerParams.base));
+  if (!layerParams.showClouds || layerOctasShown <= 0) return;
+  const reach = sightRange(layerParams.base);
   // rebuild the curved disc only when its size changes noticeably
   if (Math.abs(layerSurface.userData.radius - reach) > reach * 0.01) {
     layerSurface.geometry.dispose();
@@ -859,12 +873,7 @@ function updateReadout() {
     return;
   }
   const rep = reportedOctas(coveredFrac);
-  if (mode === 'layer') {
-    el.innerHTML = `<div class="dim">Seen on the dome</div>
-      <div class="big">${rep} / 8</div>
-      <div>${fmtOctas(coveredFrac)} octas exactly</div>
-      <div class="dim">map-view cover ${fmtOctas(layerGeo.planCover)} octas</div>`;
-  } else {
+  {
     el.innerHTML = `<div class="dim">Report</div>
       <div class="big">${rep} / 8</div>
       <div>${fmtOctas(coveredFrac)} octas exactly</div>
@@ -873,27 +882,17 @@ function updateReadout() {
 }
 
 function updateLayerPanel() {
-  const geo = layerGeo;
-  const rep = reportedOctas(coveredFrac);
-  $('#layer-compare').innerHTML = `
-    <div><div class="k">Real (map view)</div><div class="v">${fmtOctas(geo.planCover)}/8</div>
-      <div class="s">fraction of the ground shaded from straight above</div></div>
-    <div><div class="k">Seen on the dome</div><div class="v">${fmtOctas(coveredFrac)}/8</div>
-      <div class="s">you would report <strong>${rep}</strong> octas</div></div>`;
-  $('#lsize-out').textContent = layerParams.form === 'cumuliform' && geo.r
-    ? `${fmtKm(layerParams.size)} · clouds ${fmtKm(2 * geo.r)} wide`
-    : fmtKm(layerParams.size);
   const bands = bandFractions(cover);
   const rows = [];
   for (let b = 7; b >= 0; b--) {
     const e0 = OCTA_BAND_ELEVATIONS[b], e1 = OCTA_BAND_ELEVATIONS[b + 1];
-    const dNear = distanceToHeight(e1 * DEG, layerParams.base, layerParams.curved);
-    const dFar = distanceToHeight(e0 * DEG, layerParams.base, layerParams.curved);
+    const dNear = distanceToHeight(e1 * DEG, layerParams.base);
+    const dFar = distanceToHeight(e0 * DEG, layerParams.base);
     const pct = bands[b] * 100;
     rows.push(`<tr><td>${e0.toFixed(0)}°–${e1.toFixed(0)}°</td>
       <td>${b === 7 ? '0' : fmtKm(dNear)} – ${fmtKm(dFar)}</td>
       <td><div class="bar-row"><div class="bar" title="${pct.toFixed(0)}% of this band covered">
-        <i style="width:${pct}%"></i><b style="left:calc(${geo.planCover * 100}% - 1px)"></b></div>
+        <i style="width:${pct}%"></i></div>
         <span>${pct.toFixed(0)}%</span></div></td></tr>`);
   }
   $('#layer-bands tbody').innerHTML = rows.join('');
@@ -933,21 +932,19 @@ function easeOctasTo(target, ms = 700) {
   animate('octas', ms, (e) => { octasShown = from + (target - from) * e; dirty = true; });
 }
 
-// Cloud layer: the octas and the map-view cover ease too.
+// Cloud layer: the octas ease too.
 let layerOctasShown = layerParams.octas;
-
-// Rays start at the observer's eye, 1.7 m above the ground.
-const rayParams = (quick) => ({ ...layerParams, base: layerParams.base - EYE_M, quick });
 
 function recompute() {
   if (mode === 'layer') {
-    // the GPU draws the dome; this cast only feeds the numbers and the sky map
-    const quick = true;
-    layerParams.cover = solvePlanCover(rayParams(quick), layerOctasShown / 8, layerParams.cover);
-    layerGeo = castLayer(rayParams(quick), cover);
-    let s = 0;
-    for (let k = 0; k < N; k++) s += cover[k] * grid.weight[k];
-    coveredFrac = s;
+    // The GPU draws the layer; the same field here gives the threshold for
+    // the chosen octas, the numbers and the sky map. Lines of sight start at
+    // the observer's eye, 1.7 m above the ground.
+    layerField({
+      ...layerParams, octas: layerOctasShown, height: Math.max(1, layerParams.base - EYE_M),
+    }, field);
+    layerThreshold = solveThreshold(field, layerOctasShown / 8);
+    coveredFrac = coverFromField(field, layerThreshold, cover);
     paintDome(false);
     updateCloudMeshes();
     updateLayerPanel();
@@ -979,7 +976,7 @@ let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
-  if (mode === 'octas' && shapeParams.animate && (shapeParams.deform > 0 || shapeParams.shape === 'patchy')) {
+  if (mode === 'octas' && shapeParams.animate && shapeParams.modifier !== 'none' && shapeParams.amount > 0) {
     shapeParams.time += dt * 0.6;
     dirty = true;
   }
@@ -990,16 +987,8 @@ function frame(now) {
     for (const key of Object.keys(baseTween.to)) {
       layerParams[key] = baseTween.from[key] + (baseTween.to[key] - baseTween.from[key]) * ease;
     }
-    if (t >= 1) {
-      // a sheet's pattern depends on its patch size, so that changes once, at the end
-      if (baseTween.sizeAtEnd) {
-        const size = baseTween.sizeAtEnd;
-        swapLayer(() => layerCtl.size.set(size));
-      }
-      baseTween = null;
-    }
+    if (t >= 1) baseTween = null;
     layerCtl.base.sync();
-    layerCtl.size.set(layerParams.size);
     dirty = true;
   }
   if (dirty) {
@@ -1054,8 +1043,7 @@ bindRange('azimuth', shapeParams, 'azimuth', (v) => `${v}°`, () => {
 });
 bindRange('centre', shapeParams, 'centerElevation', (v) => `${v}°`);
 bindRange('axis', shapeParams, 'sliceElevation', (v) => `${v}°`);
-bindRange('clumps', shapeParams, 'clumps', (v) => v, startMorph);
-bindRange('deform', shapeParams, 'deform', (v) => (v === 0 ? 'none' : v.toFixed(2)));
+bindRange('deform', shapeParams, 'amount', (v) => (v === 0 ? 'none' : v.toFixed(2)));
 
 const chips = $('#octa-chips');
 for (let k = 0; k <= 8; k++) {
@@ -1073,19 +1061,23 @@ const shapeHelp = {
   slice: 'Wedges from horizon to zenith. Each 45° of azimuth is exactly one octa.',
   lying: 'The orange lies on its side. Each slice runs from the north horizon over the sky to the south horizon, a 180° arc. There are four slices on each side of the zenith, each one octa. Elevation slides the cloud up from the east horizon, over the zenith, toward the west. Direction turns the orange.',
   cap: 'A round patch. Move its centre down toward the horizon: the horizon clips it and it stretches to keep its area.',
-  clumps: 'Several round clouds of mixed sizes. Change the count: the total area stays the same.',
-  patchy: 'Random patches. The pattern changes, the covered area does not.',
 };
 function syncShape() {
   $$('#shape button').forEach((b) => b.classList.toggle('on', b.dataset.shape === shapeParams.shape));
+  $$('#modifier button').forEach((b) => b.classList.toggle('on', b.dataset.mod === shapeParams.modifier));
   $('#shape-help').textContent = shapeHelp[shapeParams.shape];
   const s = shapeParams.shape;
-  $('#f-azimuth').hidden = !(s === 'slice' || s === 'lying' || s === 'cap');
   $('#f-centre').hidden = s !== 'cap';
   $('#f-axis').hidden = s !== 'lying';
-  $('#f-clumps').hidden = s !== 'clumps';
-  $('#f-deform').hidden = s === 'patchy';
+  $('#f-deform').hidden = shapeParams.modifier === 'none';
 }
+$$('#modifier button').forEach((b) => b.addEventListener('click', () => {
+  if (b.dataset.mod === shapeParams.modifier) return;
+  startMorph();
+  shapeParams.modifier = b.dataset.mod;
+  syncShape();
+  dirty = true;
+}));
 function setGuides(g) {
   guides = g;
   $$('#guides button').forEach((x) => x.classList.toggle('on', x.dataset.guides === g));
@@ -1120,13 +1112,10 @@ $$('#guides button').forEach((b) => b.addEventListener('click', () => setGuides(
 // Cloud base height is shown in feet or metres; everything is
 // stored in metres. Horizontal distances stay metric.
 let heightUnit = 'ft';
-const THICKNESS_FT = { cumuliform: [100, 35000], stratiform: [50, 10000] };
-const SIZE_M = { cumuliform: [100, 5000, 10], stratiform: [300, 20000, 100] };
-const MAX_COVER = { cumuliform: 0.9, stratiform: 1 };
-const heightRange = (key) => {
-  const [lo, hi] = key === 'base' ? ETAGES[layerParams.etage].base : THICKNESS_FT[layerParams.form];
+const heightRange = () => {
+  const [lo, hi] = ETAGES[layerParams.etage].base;
   return heightUnit === 'ft'
-    ? [lo, hi, key === 'base' ? 100 : 50]
+    ? [lo, hi, 100]
     : [Math.ceil((lo * FT) / 10) * 10, Math.floor((hi * FT) / 10) * 10, 10];
 };
 const fmtHeight = (m) => (heightUnit === 'ft'
@@ -1139,7 +1128,7 @@ function bindHeight(id, key) {
   const per = () => (heightUnit === 'ft' ? FT : 1);
   const sync = () => { out.textContent = fmtHeight(layerParams[key]); };
   const place = () => {
-    const [min, max, step] = heightRange(key);
+    const [min, max, step] = heightRange();
     Object.assign(input, { min, max, step });
     input.value = Math.round(layerParams[key] / per() / step) * step;
     sync();
@@ -1155,11 +1144,14 @@ function bindHeight(id, key) {
 
 const layerCtl = {
   base: bindHeight('lbase', 'base'),
-  size: bindRange('lsize', layerParams, 'size', fmtKm),
-  extent: bindRange('lext', layerParams, 'extent', (v) => `${v} km`),
+  azimuth: bindRange('laz', layerParams, 'azimuth', (v) => `${v}°`, () => {
+    if (guides === 'lying') buildGuides();
+  }),
+  centre: bindRange('lcentre', layerParams, 'centerElevation', (v) => `${v}°`),
+  slice: bindRange('lslice', layerParams, 'sliceElevation', (v) => `${v}°`),
 };
 
-// Map-view coverage, in whole octas.
+// Coverage seen on the dome, in whole octas.
 const lchips = $('#lcover-chips');
 for (let k = 0; k <= 8; k++) {
   const b = document.createElement('button');
@@ -1175,21 +1167,15 @@ for (let k = 0; k <= 8; k++) {
 // Swap the layer for a different one (form, random pattern): the clouds fade
 // out, the change is made, and they fade back in.
 function swapLayer(change) {
-  const f0 = patternUniforms.layerFade.value;
-  animate('layerFade', 250 * f0, (e) => { patternUniforms.layerFade.value = f0 * (1 - e); }, () => {
+  const f0 = layerUniforms.layerFade.value;
+  animate('layerFade', 250 * f0, (e) => { layerUniforms.layerFade.value = f0 * (1 - e); }, () => {
     change();
     dirty = true;
-    animate('layerFade', 350, (e) => { patternUniforms.layerFade.value = e; });
+    animate('layerFade', 350, (e) => { layerUniforms.layerFade.value = e; });
   });
 }
 function syncLayerChips() {
-  const cumuliform = layerParams.form === 'cumuliform';
-  [...lchips.children].forEach((b, k) => {
-    b.classList.toggle('on', layerParams.octas === k);
-    // separate elements can't close every gap: a full layer is a sheet
-    b.disabled = cumuliform && k === 8;
-    b.title = b.disabled ? 'A fully covered layer is a sheet: choose Stratiform' : '';
-  });
+  [...lchips.children].forEach((b, k) => b.classList.toggle('on', layerParams.octas === k));
   $('#lcover-out').textContent = `${layerParams.octas}/8`;
 }
 $$('#units button').forEach((b) => b.addEventListener('click', () => {
@@ -1200,83 +1186,91 @@ $$('#units button').forEach((b) => b.addEventListener('click', () => {
 $('#lshow').addEventListener('change', (e) => { layerParams.showClouds = e.target.checked; dirty = true; });
 $('#lreseed').addEventListener('click', () => swapLayer(() => { layerParams.seed = 1 + Math.floor(Math.random() * 1e6); }));
 
-// Typical layer for each étage and form (base in ft, size in m).
-const LAYER_DEFAULTS = {
-  low: {
-    cumuliform: { base: 4000, size: 1500 },
-    stratiform: { base: 1500, size: 1500 },
-  },
-  mid: {
-    cumuliform: { base: 12000, size: 800 },
-    stratiform: { base: 10000, size: 8000 },
-  },
-  high: {
-    cumuliform: { base: 25000, size: 400 },
-    stratiform: { base: 28000, size: 10000 },
-  },
+// Typical base for each étage (ft), and texture size (m): element spacing for
+// cumuli, patch size for strati. No cumuli in the high étage.
+const ETAGE_BASE_FT = { low: 4000, mid: 12000, high: 28000 };
+const TEX_SIZE = {
+  low: { none: 1000, cumuli: 1000, strati: 2000 },
+  mid: { none: 600, cumuli: 600, strati: 8000 },
+  high: { none: 10000, cumuli: 10000, strati: 10000 },
 };
 const GENUS = {
   low: {
-    cumuliform: 'Cumulus (Cu). Towering cumulus (TCU) and cumulonimbus (Cb) have low bases too, even when their tops reach the high étage.',
-    stratiform: 'Stratus (St) or a stratocumulus (Sc) sheet. Nimbostratus (Ns) bases are often low too.',
+    none: 'A plain shape, to see how the layer maps onto the dome.',
+    cumuli: 'Cumulus (Cu). Towering cumulus (TCU) and cumulonimbus (Cb) have low bases too, even when their tops reach the high étage.',
+    strati: 'Stratus (St) or a stratocumulus (Sc) sheet. Nimbostratus (Ns) bases are often low too.',
   },
   mid: {
-    cumuliform: 'Altocumulus (Ac): small rounded elements, often in rows or patches.',
-    stratiform: 'Altostratus (As): a grey or bluish sheet; the sun may show as through ground glass.',
+    none: 'A plain shape, to see how the layer maps onto the dome.',
+    cumuli: 'Altocumulus (Ac): small rounded elements, often in rows or patches.',
+    strati: 'Altostratus (As): a grey or bluish sheet; the sun may show as through ground glass.',
   },
   high: {
-    cumuliform: 'Cirrocumulus (Cc): tiny grains or ripples, no shading.',
-    stratiform: 'Cirrostratus (Cs): a thin veil, often with a halo. Note that a thin veil can cover much of the sky while hiding little.',
+    none: 'A plain shape, to see how the layer maps onto the dome.',
+    strati: 'Cirrostratus (Cs) or cirrus (Ci): a thin veil or wisps. A thin veil can cover much of the sky while hiding little.',
   },
 };
+const layerShapeHelp = {
+  slice: 'On the layer, a wedge spreading out from overhead.',
+  lying: 'On the layer, a straight strip running north–south; elevation moves it across the sky.',
+  cap: 'On the layer, a round patch; lower its centre and it becomes a long oval far off.',
+};
 
-// Étage or form changed. Coverage is kept; a new étage moves the same layer
-// smoothly to a typical base there, and a new form loads typical
-// and element size.
-function syncLayerForm() {
-  const { etage, form } = layerParams;
+function syncLayerControls() {
+  const { etage, modifier, shape } = layerParams;
   $$('#etage button').forEach((b) => b.classList.toggle('on', b.dataset.etage === etage));
-  $$('#form button').forEach((b) => b.classList.toggle('on', b.dataset.form === form));
-  $('#genus').textContent = `Typical: ${GENUS[etage][form]}`;
-  $('#lsize-label').textContent = form === 'stratiform' ? 'Size of patches and gaps' : 'Cloud spacing';
-  const [smin, smax, sstep] = SIZE_M[form];
-  Object.assign(layerCtl.size.input, { min: smin, max: smax, step: sstep });
-  if (form === 'cumuliform' && layerParams.octas === 8) {
-    layerParams.octas = 7;
-    animate('layerOctas', 700, (e) => { layerOctasShown = 8 - e; dirty = true; });
-  }
+  $$('#lshape button').forEach((b) => b.classList.toggle('on', b.dataset.shape === shape));
+  $$('#lmod button').forEach((b) => {
+    b.classList.toggle('on', b.dataset.mod === modifier);
+    b.disabled = etage === 'high' && b.dataset.mod === 'cumuli';
+    b.title = b.disabled ? 'No cumuliform clouds in the high étage here' : '';
+  });
+  $('#genus').textContent = `Typical: ${GENUS[etage][modifier]}`;
+  $('#lshape-help').textContent = layerShapeHelp[shape];
+  $('#f-lcentre').hidden = shape !== 'cap';
+  $('#f-lslice').hidden = shape !== 'lying';
+  layerCtl.base.sync();
   syncLayerChips();
   dirty = true;
-}
-function applyFormDefaults() {
-  const d = LAYER_DEFAULTS[layerParams.etage][layerParams.form];
-  layerCtl.size.set(d.size);
-  syncLayerForm();
 }
 $$('#etage button').forEach((b) => b.addEventListener('click', () => {
   if (b.dataset.etage === layerParams.etage) return;
   layerParams.etage = b.dataset.etage;
-  // The layer moves to a typical base for the new étage and takes its typical
-  // spacing; the solver keeps the octas.
-  const d = LAYER_DEFAULTS[layerParams.etage][layerParams.form];
-  const to = { base: d.base * FT };
-  let sizeAtEnd = null;
-  if (layerParams.form === 'cumuliform') to.size = d.size;
-  else sizeAtEnd = d.size;
+  const to = { base: ETAGE_BASE_FT[layerParams.etage] * FT };
+  if (layerParams.etage === 'high' && layerParams.modifier === 'cumuli') {
+    // no cumuli up there: fade to a sheet while the layer rises
+    swapLayer(() => {
+      layerParams.modifier = 'strati';
+      layerParams.size = TEX_SIZE.high.strati;
+      syncLayerControls();
+    });
+  } else {
+    to.size = TEX_SIZE[layerParams.etage][layerParams.modifier];
+  }
+  // The layer glides to a typical base for the new étage, with that étage's
+  // typical texture size; the octas stay as chosen.
   const from = Object.fromEntries(Object.keys(to).map((k) => [k, layerParams[k]]));
-  baseTween = { from, to, sizeAtEnd, start: performance.now(), duration: 1500 };
-  syncLayerForm();
+  baseTween = { from, to, start: performance.now(), duration: 1500 };
+  syncLayerControls();
 }));
-$$('#form button').forEach((b) => b.addEventListener('click', () => {
-  if (b.dataset.form === layerParams.form) return;
-  // update the buttons now; the clouds change once they have faded out
-  $$('#form button').forEach((x) => x.classList.toggle('on', x === b));
+$$('#lmod button').forEach((b) => b.addEventListener('click', () => {
+  if (b.dataset.mod === layerParams.modifier || b.disabled) return;
+  $$('#lmod button').forEach((x) => x.classList.toggle('on', x === b));
   swapLayer(() => {
-    layerParams.form = b.dataset.form;
-    applyFormDefaults();
+    layerParams.modifier = b.dataset.mod;
+    layerParams.size = TEX_SIZE[layerParams.etage][layerParams.modifier];
+    syncLayerControls();
   });
 }));
-applyFormDefaults();
+$$('#lshape button').forEach((b) => b.addEventListener('click', () => {
+  if (b.dataset.shape === layerParams.shape) return;
+  $$('#lshape button').forEach((x) => x.classList.toggle('on', x === b));
+  swapLayer(() => {
+    layerParams.shape = b.dataset.shape;
+    syncLayerControls();
+  });
+}));
+syncLayerControls();
 
 // ---------------------------------------------------------------- quiz
 
@@ -1298,15 +1292,16 @@ function newQuiz() {
   else if (n === 1) frac = 0.01 + rnd() * (1.5 / 8 - 0.01);
   else if (n === 7) frac = 6.5 / 8 + rnd() * (1.5 / 8 - 0.01);
   else frac = (n - 0.5 + rnd() * 0.999) / 8;
-  const shapes = ['slice', 'cap', 'clumps', 'clumps', 'patchy', 'patchy'];
+  const shapes = ['slice', 'lying', 'cap'];
+  const mods = ['none', 'cumuli', 'cumuli', 'strati', 'strati'];
   quizParams = {
     octas: frac * 8,
     shape: shapes[Math.floor(rnd() * shapes.length)],
     azimuth: Math.floor(rnd() * 360),
     centerElevation: 15 + rnd() * 75,
-    clumps: 2 + Math.floor(rnd() * 12),
-    deform: 0.15 + rnd() * 0.6,
-    scale: 2 + rnd() * 4,
+    sliceElevation: rnd() * 180,
+    modifier: mods[Math.floor(rnd() * mods.length)],
+    amount: 0.3 + rnd() * 0.9,
     time: 0,
     seed: 1 + Math.floor(rnd() * 1e6),
   };
@@ -1378,6 +1373,7 @@ $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
     morph = null;
     tweens.delete('octas');
     if (view === 'outside') setView('outside', { reset: true, instant: true });
+    buildGuides();
     recompute();
     syncMap();
     syncFreeze();
