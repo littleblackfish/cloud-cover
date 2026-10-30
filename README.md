@@ -19,14 +19,13 @@ and is hosted on GitHub Pages without a build step.
 - **Cloud layer tab:** the same shapes on one flat cloud layer in the low,
   mid or high étage, broken up by cumuli or strati that sit on the layer
   itself, so perspective squeezes them toward the horizon. Coverage is
-  picked in octas as seen on the dome and held exactly. Each étage tints its
-  clouds. The scene is to scale and follows the Earth's curve: an observer
+  picked in octas as seen on the dome and held exactly. Each étage has its
+  own grey: low clouds greyest, high clouds nearly white. The scene is to scale and follows the Earth's curve: an observer
   with eyes 1.7 m up, a dome whose radius is the distance to their horizon
   (4.65 km), the ground inside it, and the layer drawn out to the observer's
   line of sight. The GPU draws the layer pixel by pixel from the same fields
   used for the octa numbers.
 - **Quiz tab:** random skies to estimate, scored using the octa rounding rules.
-- **Notes tab:** the geometry, explained for a beginner observer in Canada.
 
 ## The key geometry
 
@@ -68,11 +67,10 @@ No internet access is needed at runtime: three.js is vendored in `vendor/`
 
 - `js/sky.js`: sky grid with solid-angle weights, shape fields, the
   equal-area threshold solver and octa rounding
-- `js/layer.js`: cloud-layer ray caster
+- `js/layer.js`: cloud-layer field (shape + texture on the layer)
 - `js/main.js`: 3D scene, all-sky map and UI
 
 ## Caveat
 
-The rules in the Notes tab summarise common WMO / North American practice.
-For anything that matters, MANOBS (ECCC) and your instructor are the
-authority.
+The tool shows the geometry of cloud amount. For observing and reporting
+rules, MANOBS (ECCC) and your instructor are the authority.

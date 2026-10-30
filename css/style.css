@@ -241,11 +241,11 @@ code { font-size: 12.5px; background: var(--chip); padding: 1px 4px; border-radi
   #view, .skymap, .skymap canvas, .app, .stage-tools { transition: none; }
 }
 
-/* étage buttons carry the tint of that étage's clouds */
+/* étage buttons carry the shade of that étage's clouds */
 #etage button::before {
   content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%;
   margin-right: 6px; vertical-align: -1px; border: 1px solid rgba(0,0,0,.25);
 }
-#etage [data-etage="low"]::before { background: rgb(252, 236, 206); }
-#etage [data-etage="mid"]::before { background: rgb(214, 236, 222); }
-#etage [data-etage="high"]::before { background: rgb(226, 218, 252); }
+#etage [data-etage="low"]::before { background: rgb(208, 212, 218); }
+#etage [data-etage="mid"]::before { background: rgb(230, 233, 237); }
+#etage [data-etage="high"]::before { background: rgb(250, 251, 253); }

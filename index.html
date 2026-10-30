@@ -47,7 +47,6 @@
         <button role="tab" data-tab="octas" class="on">Octas</button>
         <button role="tab" data-tab="layer">Cloud layer</button>
         <button role="tab" data-tab="quiz">Quiz</button>
-        <button role="tab" data-tab="notes">Notes</button>
       </nav>
 
       <!-- ===================================================== OCTAS -->
@@ -116,8 +115,8 @@
           reaches them: about 130 km for a 4,000 ft layer. Everything follows
           the Earth's curve. The layer holds the same shapes as the Octas tab,
           and cumuli or strati break them up on the layer itself, so
-          perspective squeezes them toward the horizon. Each étage tints its
-          clouds (low cream, mid green, high lavender), and the view pulls
+          perspective squeezes them toward the horizon. Each étage has its own
+          shade: low clouds greyest, high clouds nearly white. The view pulls
           back as the layer rises.
         </p>
 
@@ -157,6 +156,10 @@
             <button data-mod="cumuli" class="on">Cumuli</button>
             <button data-mod="strati">Strati</button>
           </div>
+          <label class="sub-field" id="f-lamount">
+            <span>Amount <output id="lamount-out">2.00</output></span>
+            <input type="range" id="lamount" min="0" max="3" step="0.05" value="2">
+          </label>
           <p class="help" id="genus"></p>
         </fieldset>
 
@@ -214,153 +217,6 @@
         <p class="score" id="quiz-score"></p>
       </section>
 
-      <!-- ===================================================== NOTES -->
-      <section class="tab notes" id="tab-notes" hidden>
-        <h2>Notes for a new observer</h2>
-        <p class="help">
-          Worked out from geometry. The rules section summarises common
-          practice; the authority for Canadian observing is ECCC's
-          <em>MANOBS</em> and your instructor, so check anything that matters
-          there.
-        </p>
-
-        <h3>1. What an octa measures</h3>
-        <p>
-          Cloud amount is the fraction of the <strong>celestial dome</strong>
-          hidden by cloud. The dome is the whole half of the sky above your
-          horizon, every direction you could look from where you stand.
-          An octa is one eighth of it. What counts is how much of your
-          <em>view</em> is covered (its solid angle). It is not the ground
-          area under the cloud, and it is not the area on a photograph.
-        </p>
-
-        <h3>2. The dome's area is not where you expect it</h3>
-        <p>
-          The sky area above elevation <var>e</var> is proportional to
-          <code>1 − sin e</code>. So the fraction of the sky <em>below</em>
-          <var>e</var> is <code>sin e</code>. Some results:
-        </p>
-        <ul>
-          <li><strong>Half the dome lies below 30°.</strong> (sin 30° = ½)</li>
-          <li>The lowest octa is the strip from the horizon up to only <strong>7°</strong>.</li>
-          <li>The octa around the zenith is a circle reaching down to <strong>61°</strong>,
-            only 29° from straight up.</li>
-        </ul>
-        <table class="mini">
-          <thead><tr><th>Octas of sky below</th><th>Elevation</th></tr></thead>
-          <tbody id="band-table"></tbody>
-        </table>
-        <p>
-          Why: imagine the dome as a stack of rings. A ring at elevation
-          <var>e</var> has circumference proportional to <code>cos e</code>.
-          It is long near the horizon and shrinks to a point overhead. Low
-          rings hold most of the area.
-        </p>
-
-        <h3>3. Slices and quadrants</h3>
-        <p>
-          Cut the dome like an orange, from the horizon to the zenith. Every
-          45° wedge is exactly one octa, and every quadrant (N‑E, E‑S…) is two.
-          A common way to estimate: judge each quadrant in eighths, then add
-          them up. A slice looks wide at the horizon and comes to a point
-          overhead, but each slice has the same area.
-        </p>
-        <p>
-          You can also lay the orange on its side, with its axis along the
-          horizon from north to south. Now each slice is bounded by arcs that
-          run 180° from the north horizon, over the sky, to the south horizon.
-          The dome still splits into eight equal slices, four on each side of
-          the zenith. The slices next to the horizon look thin, and the ones
-          overhead look wide, but every one is an octa. Try
-          <em>Vertical slice</em> with the <em>8 vertical slices</em> guides.
-        </p>
-
-        <h3>4. Your eye squashes the dome</h3>
-        <p>
-          Most people see the sky as a flattened bowl, not a hemisphere. Asked
-          to point halfway between horizon and zenith, they usually point
-          around 20–30°, not 45°. So check elevations with your hand. At arm's
-          length a closed fist is about 10° and a spread hand about 20°.
-          Three fists up from the horizon is roughly 30°, and all the sky
-          below that line is half the dome.
-        </p>
-
-        <h3>5. The packing effect: a layer looks thicker near the horizon</h3>
-        <p>
-          A cloud overhead shows you its flat base. A cloud far off near the
-          horizon shows you its <em>side</em>. With cumulus that have real
-          depth, the sides of distant clouds fill the gaps between them. A
-          layer with 3/8 real coverage can look solid low down.
-          The <em>Cloud layer</em> tab currently treats clouds as flat, so it
-          shows a layer crowding together toward the horizon but not this
-          filling-in of the gaps, which needs cloud depth.
-        </p>
-        <p>
-          Distance also matters. A ray at elevation <var>e</var> meets a
-          cloud base at height <var>h</var> about <code>h / tan e</code>
-          away. For a 4000 ft (1200 m) base, the top half of your sky (above
-          30°) looks at a circle of cloud only about 2 km in radius. The bottom half looks at a
-          ring stretching out to about 120 km, where the Earth's curvature
-          brings the layer down to your horizon. That is thousands of times
-          more cloud area. Low sky is where distant weather and other layers
-          pile up.
-        </p>
-        <p>
-          Compare that with the ground. With your eye 1.7 m up, the ground
-          horizon is only <code>√(2Rh)</code> ≈ 4.65 km away (R is the
-          Earth's radius, 6371 km). A cloud layer at 4,000 ft only meets your
-          horizon about 125 km away. So the clouds near your horizon are far
-          beyond the ground you can see.
-        </p>
-
-        <h3>6. Reporting rules (verify against MANOBS)</h3>
-        <ul>
-          <li><strong>0</strong> means no cloud at all. Any trace of cloud, even less
-            than an eighth, is reported as at least <strong>1</strong>.</li>
-          <li><strong>8</strong> means fully covered, no gaps. Any blue showing makes it
-            at most <strong>7</strong>.</li>
-          <li>Otherwise round to the nearest eighth.</li>
-          <li>METAR terms: FEW 1–2, SCT 3–4, BKN 5–7, OVC 8 octas. The lowest
-            BKN or OVC layer (or a vertical visibility) is the ceiling.</li>
-          <li><strong>Summation principle</strong>, used in Canada and the US:
-            the amount given for a layer is the sky hidden by that layer
-            <em>plus all layers below it</em>. Amounts can only grow as you go up.
-            Example: 3/8 Sc at 3000 ft with 2/8 more Ac visible at 10 000 ft
-            becomes SCT030 BKN100.</li>
-          <li>Canadian METARs also carry a remarks group of cloud types with
-            per-layer amounts in octas (e.g. <code>SC3AC2</code>).
-            A thin veil can cover much of the sky while hiding little of it.
-            Ask how MANOBS wants amount and opacity handled.</li>
-          <li>When fog, snow, etc. at the surface hide the sky, the sky is
-            <em>obscured</em> and a vertical visibility is reported instead
-            of layers.</li>
-        </ul>
-
-        <h3>7. Field habits</h3>
-        <ul>
-          <li>Observe from a spot with as much open horizon as possible. Turn
-            all the way around, and look straight up too.</li>
-          <li>Estimate quadrant by quadrant, then check the total against your
-            first impression.</li>
-          <li>Treat the low sky with suspicion: packing, haze and distant
-            layers all make it look more covered.</li>
-          <li>At night, let your eyes adapt for several minutes. Use stars
-            (where they're missing) and lit cloud bases near towns to find
-            the cloud edges.</li>
-          <li>Never look at the sun. Block it with a building or your hand.</li>
-        </ul>
-
-        <h3>About this tool</h3>
-        <p class="help">
-          Coverage is computed on a 0.5° grid with true solid-angle weights,
-          so the numbers are exact to about 0.1%. In both tabs, cloudiness is
-          the shape plus the modifier's texture, and the cloud is the contour
-          that encloses exactly the chosen area, so changing the shape, the
-          modifier or the layer's height never changes the amount. The cloud
-          layer is flat: its cumuli and strati are simple random textures,
-          enough to show the geometry rather than real cloud structure.
-        </p>
-      </section>
     </aside>
   </div>
 

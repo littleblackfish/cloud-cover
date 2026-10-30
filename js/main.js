@@ -4,7 +4,7 @@ import {
   W, H, N, grid, computeField, solveThreshold, coverFromField, bandFractions,
   reportedOctas, makeNoise3, mulberry32, OCTA_BAND_ELEVATIONS, vertSliceFrame, vertSliceCentre,
 } from './sky.js';
-import { layerField, distanceToHeight, EARTH_R, LAYER_AMOUNT, P_OCC, ELEMENT_R } from './layer.js';
+import { layerField, distanceToHeight, EARTH_R, P_OCC, ELEMENT_R } from './layer.js';
 
 const DEG = Math.PI / 180;
 const FT = 0.3048; // metres per foot
@@ -25,7 +25,7 @@ const shapeParams = {
 // size), typical for the étage.
 const layerParams = {
   etage: 'low', shape: 'slice', azimuth: 0, centerElevation: 90, sliceElevation: 0,
-  modifier: 'cumuli', octas: 3,
+  modifier: 'cumuli', amount: 2, octas: 3,
   base: 4000 * FT, size: 1000, seed: 1, showClouds: true,
 };
 let quizParams = null;
@@ -486,10 +486,12 @@ const observerMarker = (() => {
 })();
 const setObserverVisible = (v) => { observer.visible = v; observerMarker.visible = v; };
 
-// Étage limits in feet, as used for reporting, and the tint each étage's
-// clouds get. The tint follows the cloud base, so it blends as the layer
-// moves from one étage to the next.
-const ETAGE_TINT = { low: [252, 236, 206], mid: [214, 236, 222], high: [226, 218, 252] };
+// Étage limits in feet, as used for reporting, and the shade each étage's
+// clouds get: low clouds are thick water clouds with shaded bases, so the
+// greyest; mid clouds lighter; high clouds thin ice, nearly pure white. The
+// shade follows the cloud base, so it blends as the layer moves between
+// étages.
+const ETAGE_TINT = { low: [208, 212, 218], mid: [230, 233, 237], high: [250, 251, 253] };
 function tintFor(baseM) {
   const ft = baseM / FT;
   const blend = (a, b, t) => a.map((v, i) => v + (b[i] - v) * Math.min(1, Math.max(0, t)));
@@ -560,7 +562,7 @@ function updatePattern() {
   const a = p.azimuth * DEG, e = p.centerElevation * DEG;
   U.capDir.value.set(Math.sin(a) * Math.cos(e), Math.cos(a) * Math.cos(e), Math.sin(e));
   U.texSize.value = p.size;
-  U.amount.value = LAYER_AMOUNT;
+  U.amount.value = p.amount;
   U.layerT.value = Math.max(-1e4, Math.min(1e4, layerThreshold));
   U.layerHeight.value = Math.max(1, p.base - EYE_M);
   if (permSeed !== p.seed) {
@@ -1149,6 +1151,7 @@ const layerCtl = {
   }),
   centre: bindRange('lcentre', layerParams, 'centerElevation', (v) => `${v}°`),
   slice: bindRange('lslice', layerParams, 'sliceElevation', (v) => `${v}°`),
+  amount: bindRange('lamount', layerParams, 'amount', (v) => (v === 0 ? 'none' : v.toFixed(2))),
 };
 
 // Coverage seen on the dome, in whole octas.
@@ -1229,6 +1232,7 @@ function syncLayerControls() {
   $('#lshape-help').textContent = layerShapeHelp[shape];
   $('#f-lcentre').hidden = shape !== 'cap';
   $('#f-lslice').hidden = shape !== 'lying';
+  $('#f-lamount').hidden = modifier === 'none';
   layerCtl.base.sync();
   syncLayerChips();
   dirty = true;
@@ -1346,7 +1350,7 @@ $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
   $$('.tabs button').forEach((x) => x.classList.toggle('on', x === b));
   $$('.tab').forEach((s) => { s.hidden = s.id !== `tab-${tab}`; });
   const prev = mode;
-  let next = mode; // the Notes tab keeps whatever is showing
+  let next = mode;
   if (tab === 'octas' || tab === 'layer' || tab === 'quiz') next = tab;
   const syncMap = () => {
     const hide = mode === 'quiz' && !quiz.answered && $('#quiz-hidemap').checked;
@@ -1395,10 +1399,6 @@ $('#panel-toggle').addEventListener('click', (ev) => {
   b.setAttribute('aria-expanded', String(!full));
   $('#panel').inert = full;
 });
-
-// notes: equal-area band table
-$('#band-table').innerHTML = OCTA_BAND_ELEVATIONS.slice(1)
-  .map((e, k) => `<tr><td>${k + 1}/8</td><td>${e.toFixed(1)}°</td></tr>`).join('');
 
 // ================================================================ go
 

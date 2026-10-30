@@ -23,7 +23,6 @@ import { grid, W, H, shapeField, makeNoise3 } from './sky.js';
 export const EARTH_R = 6371000;
 export const P_OCC = 0.85; // fraction of lattice cells holding a cumulus element
 export const ELEMENT_R = 0.55; // element radius, in lattice spacings
-export const LAYER_AMOUNT = 2.0; // how strongly the texture breaks up the shape
 
 // Horizontal distance at which a ray of elevation e reaches height h.
 export function distanceToHeight(e, h) {
@@ -79,18 +78,19 @@ export function stratiTexture(x, y, size, seed) {
 }
 
 // Cloudiness for every sky-grid direction. params: shape fields as on the
-// Octas tab, plus modifier, size (m), seed, and height (m above the eye).
+// Octas tab, plus modifier, amount (how strongly the texture breaks up the
+// shape), size (m), seed, and height (m above the eye).
 export function layerField(params, out) {
   shapeField(params, out);
-  const { modifier, size, seed, height } = params;
-  if (modifier === 'none') return out;
+  const { modifier, amount, size, seed, height } = params;
+  if (modifier === 'none' || !(amount > 0)) return out;
   const tex = modifier === 'cumuli' ? cumuliTexture : stratiTexture;
   for (let j = 0; j < H; j++) {
     const d = distanceToHeight(grid.el[j * W], height);
     for (let i = 0; i < W; i++) {
       const k = j * W + i;
       const a = grid.az[k];
-      out[k] += LAYER_AMOUNT * tex(d * Math.sin(a), d * Math.cos(a), size, seed);
+      out[k] += amount * tex(d * Math.sin(a), d * Math.cos(a), size, seed);
     }
   }
   return out;
