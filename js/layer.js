@@ -7,9 +7,8 @@
 // vertical walls, so a thick sheet hides more sky near the horizon too.
 //
 // Clouds are vertical cylinders (flat base, flat top, given thickness) placed
-// on an endless square lattice: each cell holds at most one cloud, centred at
-// a random spot inside the cell (it may overhang into neighbours). Because the lattice is generated from a hash of the
-// cell index, the layer is infinite and costs no memory.
+// on an endless square lattice. Because the lattice is generated from a hash
+// of the cell index, the layer is infinite and costs no memory.
 //
 // For every sample direction on the dome we cast a ray from the observer and
 // ask: does it hit any cloud? Earth curvature is included: a ray leaving at
@@ -36,31 +35,37 @@ function hash3(ix, iy, seed) {
   return [a, b, c];
 }
 
-// Turn the user-facing description into lattice parameters. Each cell holds a
-// cloud with probability P_OCC, centred anywhere in the cell, so neighbouring
-// clouds may overlap. Overlaps make the covered fraction a non-linear function
-// of spacing, so the spacing is tuned by measuring the map-view cover.
+// Cloud elements sit on a lattice of spacing `size`: each cell holds a cloud
+// with probability P_OCC, centred anywhere in the cell, so neighbours may
+// overlap. Coverage is set by the clouds' radius, so asking for more cover
+// makes the same clouds bigger rather than adding new ones. Because of the
+// overlaps, cover is a non-linear function of radius; it depends only on
+// radius / spacing, so it is measured once per random pattern and tabulated.
 const P_OCC = 0.85;
-const geoCache = new Map();
+const TABLE_N = 48;
+const tableCache = new Map();
 
-export function layerGeometry({ cover, size: diameter, seed }) {
-  const key = `${cover}|${diameter}|${seed}`;
-  if (geoCache.has(key)) return geoCache.get(key);
-  const r = diameter / 2;
-  const target = Math.min(cover, 0.95);
-  // Boolean-model first guess: cover = 1 - exp(-density * pi r^2)
-  let s = r * Math.sqrt((P_OCC * Math.PI) / -Math.log(1 - target));
-  let geo;
-  for (let it = 0; it < 4; it++) {
-    s = Math.max(s, r); // a cloud may reach at most one cell beyond its own
-    geo = { r, s, p: P_OCC, seed };
-    geo.planCover = measurePlanCover(geo, it < 3 ? 120 : 240);
-    if (Math.abs(geo.planCover - target) < 0.002) break;
-    s *= Math.sqrt(Math.log(1 - geo.planCover) / Math.log(1 - target));
-  }
-  if (geoCache.size > 200) geoCache.clear();
-  geoCache.set(key, geo);
-  return geo;
+function coverTable(seed) {
+  if (tableCache.has(seed)) return tableCache.get(seed);
+  const t = new Float64Array(TABLE_N + 1);
+  for (let i = 1; i <= TABLE_N; i++) t[i] = measurePlanCover({ r: i / TABLE_N, s: 1, p: P_OCC, seed }, 110);
+  for (let i = 1; i <= TABLE_N; i++) t[i] = Math.max(t[i], t[i - 1]); // keep monotone
+  if (tableCache.size > 20) tableCache.clear();
+  tableCache.set(seed, t);
+  return t;
+}
+
+// Largest map-view cover separate elements can reach (radius = spacing).
+export const maxElementCover = (seed) => coverTable(seed)[TABLE_N];
+
+export function layerGeometry({ cover, size, seed }) {
+  const t = coverTable(seed);
+  const c = Math.min(cover, t[TABLE_N]);
+  let i = 1;
+  while (i < TABLE_N && t[i] < c) i++;
+  const f = t[i] > t[i - 1] ? (c - t[i - 1]) / (t[i] - t[i - 1]) : 1;
+  const k = (i - 1 + f) / TABLE_N;
+  return { r: k * size, s: size, p: P_OCC, seed, planCover: c };
 }
 
 function coveredAt(px, py, geo) {
@@ -101,17 +106,58 @@ export function cloudAt(ix, iy, geo) {
   return { x: (ix + jx) * geo.s, y: (iy + jy) * geo.s };
 }
 
-// `params.quick` casts one ray per grid cell instead of four (used while the
-// layer is being animated).
-export function castLayer(params, cover) {
-  if (params.cover <= 0) {
-    cover.fill(0);
-    return { planCover: 0 };
-  }
-  return params.form === 'stratiform' ? castSheet(params, cover) : castElements(params, cover);
+// Cast rays over a w x h azimuth/elevation grid (ss x ss rays per cell) and
+// return the covered fraction of the dome. If `cover` is given, the per-cell
+// fractions are written into it.
+function castGrid(params, w, h, ss, cover) {
+  if (cover) cover.fill(0);
+  if (params.cover <= 0) return { geo: { planCover: 0 }, frac: 0 };
+  return params.form === 'stratiform'
+    ? castSheet(params, w, h, ss, cover)
+    : castElements(params, w, h, ss, cover);
 }
 
-function castElements(params, cover) {
+// The full-resolution sky grid. `params.quick` casts one ray per cell instead
+// of four (used while the layer is being animated).
+export function castLayer(params, cover) {
+  return castGrid(params, W, H, params.quick ? 1 : 2, cover).geo;
+}
+
+// Dome fraction from a coarse grid: cheap enough to search with.
+const domeFraction = (params) => castGrid(params, 240, 60, 1, null).frac;
+
+// Map-view cover that makes the layer hide `target` of the dome. Dome cover
+// grows with map cover, so bisect; `hint` (the last answer) narrows the start.
+export function solvePlanCover(params, target, hint) {
+  if (target <= 0) return 0;
+  const max = params.form === 'stratiform' ? 1 : maxElementCover(params.seed);
+  if (target >= 1) return max;
+  let lo = 0, hi = max;
+  if (hint > 0 && hint < max) {
+    const at = domeFraction({ ...params, cover: hint });
+    if (at < target) lo = hint; else hi = hint;
+    const iters = 6;
+    for (let i = 0; i < iters; i++) {
+      // walk outward until the bracket holds the answer
+      const probe = lo === hint ? Math.min(max, hint + (hint * 0.25) * 2 ** i) : Math.max(0, hint - (hint * 0.25) * 2 ** i);
+      const f = domeFraction({ ...params, cover: probe });
+      if (lo === hint) { if (f >= target) { hi = probe; break; } lo = probe; } else { if (f < target) { lo = probe; break; } hi = probe; }
+    }
+  }
+  for (let i = 0; i < 14; i++) {
+    const mid = (lo + hi) / 2;
+    if (domeFraction({ ...params, cover: mid }) < target) lo = mid; else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
+function rowWeights(h) {
+  const wts = new Float64Array(h);
+  for (let j = 0; j < h; j++) wts[j] = Math.sin(((j + 1) / h) * Math.PI / 2) - Math.sin((j / h) * Math.PI / 2);
+  return wts;
+}
+
+function castElements(params, w, h, SS, cover) {
   const { base, thickness, extent, curved } = params;
   const geo = layerGeometry(params);
   const { r, s } = geo;
@@ -161,111 +207,120 @@ function castElements(params, cover) {
     return false;
   };
 
-  // 2 x 2 rays per grid cell, so cover holds fractions 0, .25, ... 1
-  const SS = params.quick ? 1 : 2;
-  cover.fill(0);
-  for (let j = 0; j < H; j++) {
+  const wts = rowWeights(h);
+  let frac = 0;
+  for (let j = 0; j < h; j++) {
+    let row = 0;
     for (let sj = 0; sj < SS; sj++) {
-      const e = ((j + (sj + 0.5) / SS) / H) * (Math.PI / 2);
+      const e = ((j + (sj + 0.5) / SS) / h) * (Math.PI / 2);
       const ds = distanceToHeight(e, base, curved);
       const de = Math.min(distanceToHeight(e, top, curved), maxD);
       if (!(ds < de)) continue;
-      for (let i = 0; i < W; i++) {
+      for (let i = 0; i < w; i++) {
         for (let si = 0; si < SS; si++) {
-          const a = ((i + (si + 0.5) / SS) / W) * 2 * Math.PI;
-          if (hitRay(a, ds, de)) cover[j * W + i] += 1 / (SS * SS);
+          const a = ((i + (si + 0.5) / SS) / w) * 2 * Math.PI;
+          if (hitRay(a, ds, de)) {
+            row++;
+            if (cover) cover[j * w + i] += 1 / (SS * SS);
+          }
         }
       }
     }
+    frac += (row / (w * SS * SS)) * wts[j];
   }
-  return geo;
+  return { geo, frac };
 }
 
 // ---------------------------------------------------------------- sheets
 
-const sheetCache = new Map();
+const fieldCache = new Map();
 
-// Smooth random field over the ground plane (metres), with features about
-// `size` across, and the threshold that leaves the requested cover.
-export function sheetGeometry({ cover, size, seed }) {
-  const key = `${cover}|${size}|${seed}`;
-  if (sheetCache.has(key)) return sheetCache.get(key);
+// Smooth random field over the ground plane (metres) with features about
+// `size` across, plus a sorted sample of its values for finding thresholds.
+export function sheetField({ size, seed }) {
+  const key = `${size}|${seed}`;
+  if (fieldCache.has(key)) return fieldCache.get(key);
   const noise = makeNoise3(seed);
   const f = 1 / size;
   const field = (x, y) => noise(x * f, y * f, 0.37) + 0.45 * noise(x * f * 2.3 + 17, y * f * 2.3, 1.7);
-  let T;
-  if (cover >= 0.999) T = -Infinity;
-  else {
-    const n = 220, span = 60 * size, vals = new Float32Array(n * n);
-    for (let a = 0; a < n; a++) {
-      for (let b = 0; b < n; b++) vals[a * n + b] = field((a / n - 0.5) * span, (b / n - 0.5) * span);
-    }
-    vals.sort();
-    T = vals[Math.min(vals.length - 1, Math.floor((1 - cover) * vals.length))];
+  const n = 220, span = 60 * size, vals = new Float32Array(n * n);
+  for (let a = 0; a < n; a++) {
+    for (let b = 0; b < n; b++) vals[a * n + b] = field((a / n - 0.5) * span, (b / n - 0.5) * span);
   }
-  const geo = { field, T, planCover: Math.min(cover, 1) };
-  if (sheetCache.size > 50) sheetCache.clear();
-  sheetCache.set(key, geo);
-  return geo;
+  vals.sort();
+  const out = { field, vals };
+  if (fieldCache.size > 30) fieldCache.clear();
+  fieldCache.set(key, out);
+  return out;
 }
 
-function castSheet(params, cover) {
+// The sheet is cloudy where the field exceeds T; lowering T grows the patches
+// and shrinks the gaps.
+export function sheetGeometry(params) {
+  const { field, vals } = sheetField(params);
+  const { cover } = params;
+  const T = cover >= 0.999 ? -Infinity : vals[Math.min(vals.length - 1, Math.floor((1 - cover) * vals.length))];
+  return { field, T, planCover: Math.min(cover, 1) };
+}
+
+function castSheet(params, w, h, SS, cover) {
   const { base, thickness, extent, curved } = params;
   const geo = sheetGeometry(params);
   const { field, T } = geo;
   const top = base + thickness;
   const maxD = extent * 1000;
   const step = params.size / 3;
-  const SS = params.quick ? 1 : 2;
-  cover.fill(0);
-  for (let j = 0; j < H; j++) {
+  const wts = rowWeights(h);
+  let frac = 0;
+  for (let j = 0; j < h; j++) {
+    let row = 0;
     for (let sj = 0; sj < SS; sj++) {
-      const e = ((j + (sj + 0.5) / SS) / H) * (Math.PI / 2);
+      const e = ((j + (sj + 0.5) / SS) / h) * (Math.PI / 2);
       const ds = distanceToHeight(e, base, curved);
       if (!(ds < maxD)) continue;
       const de = Math.min(distanceToHeight(e, top, curved), maxD);
       // sample the ray's path through the sheet: a hole shows sky only if it
       // is open all the way through
       const n = Math.min(6, 1 + Math.ceil((de - ds) / step));
-      for (let i = 0; i < W; i++) {
+      for (let i = 0; i < w; i++) {
         for (let si = 0; si < SS; si++) {
-          const a = ((i + (si + 0.5) / SS) / W) * 2 * Math.PI;
+          const a = ((i + (si + 0.5) / SS) / w) * 2 * Math.PI;
           const dx = Math.sin(a), dy = Math.cos(a);
           for (let q = 0; q < n; q++) {
             const d = n === 1 ? ds : ds + ((de - ds) * q) / (n - 1);
             if (field(d * dx, d * dy) > T) {
-              cover[j * W + i] += 1 / (SS * SS);
+              row++;
+              if (cover) cover[j * w + i] += 1 / (SS * SS);
               break;
             }
           }
         }
       }
     }
+    frac += (row / (w * SS * SS)) * wts[j];
   }
-  return geo;
+  return { geo, frac };
 }
 
 // ---------------------------------------------------------------- drawing
 
-// Cloud elements close enough to draw inside a unit dome, nearest first.
-// `k` is scene units per metre.
-export function nearbyClouds(params, k, limit) {
+// Cloud elements within `reach` metres (horizontally) of the observer, nearest
+// first, in scene units (`k` scene units per metre).
+export function nearbyClouds(params, k, reach, limit) {
   if (params.cover <= 0) return [];
   const geo = layerGeometry(params);
+  if (geo.r <= 0) return [];
   const base = params.base * k;
   const top = (params.base + params.thickness) * k;
-  const rr = geo.r * k;
-  const reach = Math.sqrt(Math.max(0, 1 - base * base)) / k; // metres
-  const n = Math.min(400, Math.ceil(reach / geo.s) + 1);
+  const n = Math.min(300, Math.ceil(reach / geo.s) + 1);
   const out = [];
   for (let ix = -n; ix <= n; ix++) {
     for (let iy = -n; iy <= n; iy++) {
       const c = cloudAt(ix, iy, geo);
       if (!c) continue;
-      const cx = c.x * k, cy = c.y * k;
-      const far = Math.hypot(cx, cy) + rr;
-      if (far * far + top * top > 0.995) continue;
-      out.push({ x: cx, y: cy, r: rr, base, top, d: far });
+      const d = Math.hypot(c.x, c.y);
+      if (d > reach) continue;
+      out.push({ x: c.x * k, y: c.y * k, r: geo.r * k, base, top, d });
     }
   }
   out.sort((p, q) => p.d - q.d);

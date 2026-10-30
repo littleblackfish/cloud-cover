@@ -123,10 +123,10 @@
       <section class="tab" id="tab-layer" hidden>
         <p class="help">
           One cloud layer, parallel to the ground, seen by the observer at the
-          centre. The scene is drawn to scale: the dome's radius stands for
-          about 46,000 ft, so you can see the three étages (heights). The
-          observer marker is not to scale. Compare the layer's real map-view
-          coverage with how much of the dome it covers.
+          centre. Everything is to scale: the observer is about 6 ft tall, the
+          dome has a 100 ft radius, and the clouds sit at their real heights
+          above it. Zoom out to see the whole layer and the height mast with
+          the three étages.
         </p>
 
         <fieldset class="field">
@@ -147,8 +147,17 @@
         </fieldset>
 
         <div class="field">
-          <span>Real coverage, map view <output id="lcover-out"></output></span>
+          <span>Coverage <output id="lcover-out"></output></span>
+          <div class="seg" id="lcover-mode">
+            <button data-cmode="dome" class="on">Seen on the dome</button>
+            <button data-cmode="map">Map view, from above</button>
+          </div>
           <div class="chips" id="lcover-chips"></div>
+          <p class="help">
+            Seen on the dome: the layer adjusts its cloud sizes so you see this
+            many octas, even as it changes height. Map view: the real cover
+            stays fixed and what you see changes.
+          </p>
         </div>
         <div class="field units">
           <span>Heights in</span>
@@ -166,8 +175,8 @@
           <input type="range" id="lthick" min="100" max="35000" step="100" value="3000">
         </label>
         <label class="field">
-          <span><span id="lsize-label">Cloud diameter</span> <output id="lsize-out"></output></span>
-          <input type="range" id="lsize" min="50" max="4000" step="10" value="900">
+          <span><span id="lsize-label">Cloud spacing</span> <output id="lsize-out"></output></span>
+          <input type="range" id="lsize" min="100" max="5000" step="10" value="1500">
         </label>
         <label class="field">
           <span>Layer extends out to <output id="lext-out"></output></span>

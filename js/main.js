@@ -4,7 +4,7 @@ import {
   W, H, N, grid, computeField, solveThreshold, coverFromField, bandFractions,
   reportedOctas, makeNoise3, mulberry32, OCTA_BAND_ELEVATIONS, vertSliceFrame, vertSliceBoundaries,
 } from './sky.js';
-import { castLayer, nearbyClouds, sheetGeometry, distanceToHeight } from './layer.js';
+import { castLayer, nearbyClouds, sheetField, sheetGeometry, solvePlanCover, distanceToHeight } from './layer.js';
 
 const DEG = Math.PI / 180;
 const FT = 0.3048; // metres per foot
@@ -19,7 +19,10 @@ const shapeParams = {
 };
 const layerParams = {
   etage: 'low', form: 'cumuliform',
-  cover: 3 / 8, base: 4000 * FT, thickness: 3000 * FT, size: 900, extent: 400,
+  // octas: chosen amount; coverMode says whether it is the amount seen on the
+  // dome or the map-view amount. cover: resulting map-view fraction.
+  octas: 3, coverMode: 'dome', cover: 3 / 8,
+  base: 4000 * FT, thickness: 3000 * FT, size: 1500, extent: 400,
   curved: true, seed: 1, showClouds: true,
 };
 let quizParams = null;
@@ -45,11 +48,12 @@ const noiseFor = (seed) => {
 // ================================================================ three.js scene
 
 const canvas = $('#view');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+// The cloud-layer scene spans 100 ft to 100 km, so depth needs a log buffer.
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0f1622);
-const camera = new THREE.PerspectiveCamera(45, 1, 0.005, 100);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.005, 1e5);
 
 scene.add(new THREE.HemisphereLight(0xffffff, 0x556070, 1.1));
 const sun = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -110,17 +114,22 @@ const dome = new THREE.Mesh(
     side: THREE.DoubleSide,
     depthWrite: false,
     vertexShader: `
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
       varying vec2 vUv;
       void main() {
         vUv = uv;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        #include <logdepthbuf_vertex>
       }`,
     fragmentShader: `
       uniform sampler2D field;
       uniform float threshold, skyAlpha, cloudAlpha;
       uniform vec3 skyColor, cloudColor;
       varying vec2 vUv;
+      #include <logdepthbuf_pars_fragment>
       void main() {
+        #include <logdepthbuf_fragment>
         float f = texture2D(field, vUv).r;
         float w = max(fwidth(f), 1e-5);
         float a = smoothstep(threshold - w, threshold + w, f);
@@ -234,11 +243,15 @@ scene.add(observer);
 
 // ---------------------------------------------------------------- cloud layer
 //
-// In cloud-layer mode the scene is to scale: one dome radius = SCENE_M metres
-// (about 46,000 ft), so the three étages sit at their true relative heights.
+// In cloud-layer mode the scene is to scale around the observer: the dome's
+// radius is 100 ft, so it sits between the observer (about 6 ft tall) and
+// the lowest possible cloud. Clouds are drawn out to REACH_M; the projection
+// on the dome includes the whole layer, out to the horizon.
 
-const SCENE_M = 14000;
-const K = 1 / SCENE_M; // scene units per metre
+const SCENE_M = 100 * FT; // metres per scene unit: dome radius = 100 ft
+const K = 1 / SCENE_M;
+const REACH_M = 25000;
+const REACH = REACH_M * K;
 
 // Étage limits in feet, as used for reporting.
 const ETAGES = {
@@ -249,53 +262,62 @@ const ETAGES = {
 
 const layerDecor = new THREE.Group();
 scene.add(layerDecor);
-const etageBand = new THREE.Mesh(
-  new THREE.BufferGeometry(),
-  new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false }),
-);
-layerDecor.add(etageBand);
 const etageLabels = {};
 
-function etageSprite(text) {
+function labelSprite(text, size) {
   const c = document.createElement('canvas');
   c.width = 512;
   c.height = 128;
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthWrite: false, transparent: true }));
-  s.scale.set(0.44, 0.11, 1);
+  // fixed on-screen size, so labels stay readable at any zoom
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: t, depthWrite: false, depthTest: false, transparent: true, sizeAttenuation: false,
+  }));
+  s.center.set(0, 0.5);
+  s.scale.set(size * 4, size, 1);
+  s.renderOrder = 5;
   s.userData.draw = (active) => {
     const g = c.getContext('2d');
     g.clearRect(0, 0, 512, 128);
-    g.font = `${active ? 700 : 500} 52px system-ui, sans-serif`;
+    g.font = `${active ? 700 : 500} 56px system-ui, sans-serif`;
     g.textBaseline = 'middle';
-    g.fillStyle = active ? '#ffd27a' : '#9fb0c3';
+    g.fillStyle = active ? '#ffd27a' : '#c4cfdb';
     g.fillText(text, 8, 64);
     t.needsUpdate = true;
   };
+  s.userData.draw(false);
   return s;
 }
 
+// A height mast beside the observer with the étage boundaries marked.
+const MAST = dirFromAzEl(320 * DEG, 0, 50); // 5,000 ft away, behind the dome as first seen
+const etageMarker = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.25, 0.25, 1, 12),
+  new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.6 }),
+);
 {
-  // boundaries between étages: a faint disc and a ring where the plane meets the dome
+  const top = 45000 * FT * K;
+  layerDecor.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([MAST.clone(), MAST.clone().setY(top)]),
+    new THREE.LineBasicMaterial({ color: 0xaec6e0, transparent: true, opacity: 0.8 }),
+  ));
+  layerDecor.add(etageMarker);
   for (const ft of [6500, 20000]) {
     const y = ft * FT * K;
-    const r = Math.sqrt(1 - y * y);
     const disc = new THREE.Mesh(
-      new THREE.CircleGeometry(r, 96),
-      new THREE.MeshBasicMaterial({ color: 0xaec6e0, transparent: true, opacity: 0.05, side: THREE.DoubleSide, depthWrite: false }),
+      new THREE.CircleGeometry(REACH, 96),
+      new THREE.MeshBasicMaterial({ color: 0xaec6e0, transparent: true, opacity: 0.035, side: THREE.DoubleSide, depthWrite: false }),
     );
     disc.rotation.x = -Math.PI / 2;
     disc.position.y = y;
-    layerDecor.add(disc, circleLine(Math.asin(y), 1.003, 0xaec6e0, 0.6));
+    const tick = labelSprite(`${ft.toLocaleString('en-CA')} ft`, 0.035);
+    tick.position.copy(MAST).setY(y);
+    layerDecor.add(disc, tick);
   }
   for (const [key, e] of Object.entries(ETAGES)) {
-    const label = etageSprite(`${e.name} étage`);
-    const y = ((e.band[0] + Math.min(e.band[1], 40000)) / 2) * FT * K;
-    const r = Math.sqrt(1 - y * y) + 0.3;
-    label.position.copy(dirFromAzEl(50 * DEG, 0, r)).setY(y);
-    label.material.depthTest = false;
-    label.renderOrder = 5;
+    const label = labelSprite(`${e.name} étage`, 0.045);
+    label.position.copy(MAST).setY(((e.band[0] + Math.min(e.band[1], 40000)) / 2) * FT * K);
     etageLabels[key] = label;
     layerDecor.add(label);
   }
@@ -303,14 +325,9 @@ function etageSprite(text) {
 
 function updateEtageDecor() {
   const [lo, hi] = ETAGES[layerParams.etage].band;
-  const y0 = lo * FT * K, y1 = Math.min(0.999, hi * FT * K);
-  const pts = [];
-  for (let i = 0; i <= 24; i++) {
-    const y = y0 + ((y1 - y0) * i) / 24;
-    pts.push(new THREE.Vector2(Math.sqrt(1 - y * y) * 1.006, y));
-  }
-  etageBand.geometry.dispose();
-  etageBand.geometry = new THREE.LatheGeometry(pts, 128);
+  const y0 = lo * FT * K, y1 = Math.min(hi, 45000) * FT * K;
+  etageMarker.scale.set(1, y1 - y0, 1);
+  etageMarker.position.copy(MAST).setY((y0 + y1) / 2);
   for (const [key, label] of Object.entries(etageLabels)) label.userData.draw(key === layerParams.etage);
 }
 
@@ -322,82 +339,75 @@ const cloudMesh = new THREE.InstancedMesh(
   MAX_CLOUDS,
 );
 cloudMesh.count = 0;
-cloudMesh.renderOrder = 1;
+cloudMesh.frustumCulled = false;
 scene.add(cloudMesh);
 
-// Stratiform sheet, drawn as its base and top surfaces with the same holes.
-const SHEET_PX = 768;
+// Stratiform sheet: its base and top surfaces, cut by the same holes. The
+// texture stores the cloudiness field; alphaTest at the threshold cuts the
+// holes, so changing the cover only moves the threshold.
+const SHEET_PX = 1024;
 const sheetCanvas = document.createElement('canvas');
 sheetCanvas.width = sheetCanvas.height = SHEET_PX;
 const sheetTexture = new THREE.CanvasTexture(sheetCanvas);
-sheetTexture.colorSpace = THREE.SRGBColorSpace;
 const sheetMeshes = [0xd9dee5, 0xf6f7f9].map((color) => {
   const m = new THREE.Mesh(
-    new THREE.CircleGeometry(1, 128),
-    new THREE.MeshBasicMaterial({ color, map: sheetTexture, transparent: true, side: THREE.DoubleSide, depthWrite: false }),
+    new THREE.CircleGeometry(REACH, 160),
+    new THREE.MeshBasicMaterial({ color, alphaMap: sheetTexture, alphaTest: 0.5, side: THREE.DoubleSide }),
   );
   m.rotation.x = -Math.PI / 2;
-  m.renderOrder = 1;
   m.visible = false;
   scene.add(m);
   return m;
 });
+const FIELD_LO = -1.6, FIELD_SPAN = 3.2; // field values -> 0..1 in the texture
 
-// The sheet texture covers the dome's whole footprint, so it only needs
-// redrawing when the pattern changes, not when the layer moves up or down.
 let sheetKey = '';
 function drawSheet() {
-  const { base, thickness, cover, size, seed } = layerParams;
-  const key = `${cover}|${size}|${seed}`;
+  const { base, thickness, size, seed } = layerParams;
+  const key = `${size}|${seed}`;
   if (key !== sheetKey) {
     sheetKey = key;
-    const { field, T } = sheetGeometry(layerParams);
+    const { field } = sheetField(layerParams);
     const g = sheetCanvas.getContext('2d');
     const img = g.createImageData(SHEET_PX, SHEET_PX);
-    const edge = 0.04;
     for (let py = 0; py < SHEET_PX; py++) {
-      const north = (1 - ((py + 0.5) / SHEET_PX) * 2) * SCENE_M;
+      const north = (1 - ((py + 0.5) / SHEET_PX) * 2) * REACH_M;
       for (let px = 0; px < SHEET_PX; px++) {
-        const east = (((px + 0.5) / SHEET_PX) * 2 - 1) * SCENE_M;
-        let a = (field(east, north) - T) / edge + 0.5;
-        a = a < 0 ? 0 : a > 1 ? 1 : a;
+        const east = (((px + 0.5) / SHEET_PX) * 2 - 1) * REACH_M;
+        const v = Math.max(0, Math.min(1, (field(east, north) - FIELD_LO) / FIELD_SPAN));
         const o = (py * SHEET_PX + px) * 4;
-        img.data[o] = img.data[o + 1] = img.data[o + 2] = 255;
-        img.data[o + 3] = 235 * a;
+        img.data[o] = img.data[o + 1] = img.data[o + 2] = 255 * v;
+        img.data[o + 3] = 255;
       }
     }
     g.putImageData(img, 0, 0);
     sheetTexture.needsUpdate = true;
   }
-  const yb = base * K, yt = (base + thickness) * K;
-  const rr = Math.sqrt(Math.max(0, 1 - yb * yb)) * 0.995;
-  // show the part of the texture under a disc of radius rr
-  sheetTexture.repeat.set(rr, rr);
-  sheetTexture.offset.set(0.5 - rr / 2, 0.5 - rr / 2);
-  // both surfaces share the base's radius; the top is only drawn while that
-  // disc still fits inside the dome
+  const { T } = sheetGeometry(layerParams);
+  const test = T === -Infinity ? 0 : Math.max(0.001, (T - FIELD_LO) / FIELD_SPAN);
   sheetMeshes.forEach((m, i) => {
-    const y = i === 0 ? yb : yt;
-    m.scale.set(rr, rr, 1);
-    m.position.y = y;
-    m.visible = y < 1 && rr * rr + y * y < 1.0001 && !(i === 1 && thickness * K < 0.002);
+    if ((m.material.alphaTest > 0) !== (test > 0)) m.material.needsUpdate = true;
+    m.material.alphaTest = test;
+    m.position.y = (i === 0 ? base : base + thickness) * K;
+    m.visible = !(i === 1 && thickness < 20);
   });
 }
 
 function updateCloudMeshes() {
   const on = mode === 'layer';
   layerDecor.visible = on;
-  observer.scale.setScalar(on ? 0.4 : 1);
+  observer.scale.setScalar(on ? 0.7 : 1); // about 6 ft against the 100 ft dome
+  ground.scale.setScalar(on ? (REACH * 1.2) / 1.6 : 1);
   cloudMesh.count = 0;
   sheetMeshes.forEach((m) => { m.visible = false; });
   if (!on) return;
   updateEtageDecor();
-  if (!layerParams.showClouds) return;
+  if (!layerParams.showClouds || layerParams.cover <= 0) return;
   if (layerParams.form === 'stratiform') {
     drawSheet();
     return;
   }
-  const list = nearbyClouds(layerParams, K, MAX_CLOUDS);
+  const list = nearbyClouds(layerParams, K, REACH_M, MAX_CLOUDS);
   const m = new THREE.Matrix4();
   list.forEach((c, i) => {
     const h = c.top - c.base;
@@ -414,7 +424,7 @@ function updateCloudMeshes() {
 const orbit = new OrbitControls(camera, canvas);
 orbit.enableDamping = true;
 orbit.minDistance = 1.2;
-orbit.maxDistance = 7;
+orbit.maxDistance = 7; // widened in cloud-layer mode
 orbit.maxPolarAngle = Math.PI / 2 + 0.35;
 
 const look = { yaw: 0, pitch: 25 * DEG, fov: 80, drag: null };
@@ -426,7 +436,6 @@ function setView(v, { yaw } = {}) {
   for (const label of Object.values(etageLabels)) label.visible = v === 'outside';
   orbit.enabled = v === 'outside';
   if (v === 'outside') {
-    camera.fov = 45;
     resetOutside();
     $('#view-hint').textContent = 'Drag to orbit · scroll to zoom';
   } else {
@@ -438,8 +447,19 @@ function setView(v, { yaw } = {}) {
   camera.updateProjectionMatrix();
 }
 function resetOutside() {
-  camera.position.set(2.1, 1.5, 2.4);
-  orbit.target.set(0, 0.25, 0);
+  if (mode === 'layer') {
+    // low, looking up: the 100 ft dome in front, the cloud layer above
+    orbit.maxDistance = 3000;
+    camera.fov = 60;
+    camera.position.set(7, 2, 8.5);
+    orbit.target.set(0, 5, 0);
+  } else {
+    orbit.maxDistance = 7;
+    camera.fov = 45;
+    camera.position.set(2.1, 1.5, 2.4);
+    orbit.target.set(0, 0.25, 0);
+  }
+  camera.updateProjectionMatrix();
   orbit.update();
 }
 
@@ -645,6 +665,9 @@ function updateLayerPanel() {
       <div class="s">fraction of the ground shaded from straight above</div></div>
     <div><div class="k">Seen on the dome</div><div class="v">${fmtOctas(coveredFrac)}/8</div>
       <div class="s">you would report <strong>${rep}</strong> octas</div></div>`;
+  $('#lsize-out').textContent = layerParams.form === 'cumuliform' && geo.r
+    ? `${fmtKm(layerParams.size)} · clouds ${fmtKm(2 * geo.r)} wide`
+    : fmtKm(layerParams.size);
   const bands = bandFractions(cover);
   const rows = [];
   for (let b = 7; b >= 0; b--) {
@@ -665,7 +688,11 @@ function updateLayerPanel() {
 
 function recompute() {
   if (mode === 'layer') {
-    layerGeo = castLayer({ ...layerParams, quick: !!baseTween }, cover);
+    const quick = !!baseTween;
+    layerParams.cover = layerParams.coverMode === 'dome'
+      ? solvePlanCover({ ...layerParams, quick }, layerParams.octas / 8, layerParams.cover)
+      : layerParams.octas / 8;
+    layerGeo = castLayer({ ...layerParams, quick }, cover);
     let s = 0;
     for (let k = 0; k < N; k++) s += cover[k] * grid.weight[k];
     coveredFrac = s;
@@ -698,9 +725,17 @@ function frame(now) {
   if (baseTween) {
     const t = Math.min(1, (now - baseTween.start) / baseTween.duration);
     const ease = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
-    layerParams.base = baseTween.from + (baseTween.to - baseTween.from) * ease;
-    if (t >= 1) baseTween = null;
+    for (const key of Object.keys(baseTween.to)) {
+      layerParams[key] = baseTween.from[key] + (baseTween.to[key] - baseTween.from[key]) * ease;
+    }
+    if (t >= 1) {
+      // a sheet's pattern depends on its patch size, so that changes once, at the end
+      if (baseTween.sizeAtEnd) layerCtl.size.set(baseTween.sizeAtEnd);
+      baseTween = null;
+    }
     layerCtl.base.sync();
+    layerCtl.thickness.sync();
+    layerCtl.size.set(layerParams.size);
     dirty = true;
   }
   if (dirty) {
@@ -803,7 +838,7 @@ $$('#guides button').forEach((b) => b.addEventListener('click', () => setGuides(
 // stored in metres. Horizontal distances stay metric.
 let heightUnit = 'ft';
 const THICKNESS_FT = { cumuliform: [100, 35000], stratiform: [50, 10000] };
-const SIZE_M = { cumuliform: [50, 4000, 10], stratiform: [300, 20000, 100] };
+const SIZE_M = { cumuliform: [100, 5000, 10], stratiform: [300, 20000, 100] };
 const MAX_COVER = { cumuliform: 0.9, stratiform: 1 };
 const heightRange = (key) => {
   const [lo, hi] = key === 'base' ? ETAGES[layerParams.etage].base : THICKNESS_FT[layerParams.form];
@@ -848,21 +883,27 @@ for (let k = 0; k <= 8; k++) {
   const b = document.createElement('button');
   b.textContent = k;
   b.addEventListener('click', () => {
-    layerParams.cover = k / 8;
+    layerParams.octas = k;
     syncLayerChips();
     dirty = true;
   });
   lchips.append(b);
 }
+$$('#lcover-mode button').forEach((b) => b.addEventListener('click', () => {
+  layerParams.coverMode = b.dataset.cmode;
+  syncLayerChips();
+  dirty = true;
+}));
 function syncLayerChips() {
   const cumuliform = layerParams.form === 'cumuliform';
   [...lchips.children].forEach((b, k) => {
-    b.classList.toggle('on', Math.round(layerParams.cover * 8) === k);
+    b.classList.toggle('on', layerParams.octas === k);
     // separate elements can't close every gap: a full layer is a sheet
     b.disabled = cumuliform && k === 8;
     b.title = b.disabled ? 'A fully covered layer is a sheet: choose Stratiform' : '';
   });
-  $('#lcover-out').textContent = `${Math.round(layerParams.cover * 8)}/8`;
+  $('#lcover-out').textContent = `${layerParams.octas}/8`;
+  $$('#lcover-mode button').forEach((b) => b.classList.toggle('on', b.dataset.cmode === layerParams.coverMode));
 }
 $$('#units button').forEach((b) => b.addEventListener('click', () => {
   heightUnit = b.dataset.units;
@@ -877,15 +918,15 @@ $('#lreseed').addEventListener('click', () => { layerParams.seed = 1 + Math.floo
 // Typical layer for each étage and form (heights in ft, size in m).
 const LAYER_DEFAULTS = {
   low: {
-    cumuliform: { base: 4000, thickness: 3000, size: 900 },
+    cumuliform: { base: 4000, thickness: 3000, size: 1500 },
     stratiform: { base: 1500, thickness: 800, size: 1500 },
   },
   mid: {
-    cumuliform: { base: 12000, thickness: 600, size: 600 },
+    cumuliform: { base: 12000, thickness: 600, size: 800 },
     stratiform: { base: 10000, thickness: 4000, size: 8000 },
   },
   high: {
-    cumuliform: { base: 25000, thickness: 200, size: 300 },
+    cumuliform: { base: 25000, thickness: 200, size: 400 },
     stratiform: { base: 28000, thickness: 1500, size: 10000 },
   },
 };
@@ -912,10 +953,10 @@ function syncLayerForm() {
   $$('#etage button').forEach((b) => b.classList.toggle('on', b.dataset.etage === etage));
   $$('#form button').forEach((b) => b.classList.toggle('on', b.dataset.form === form));
   $('#genus').textContent = `Typical: ${GENUS[etage][form]}`;
-  $('#lsize-label').textContent = form === 'stratiform' ? 'Size of patches and gaps' : 'Cloud diameter';
+  $('#lsize-label').textContent = form === 'stratiform' ? 'Size of patches and gaps' : 'Cloud spacing';
   const [smin, smax, sstep] = SIZE_M[form];
   Object.assign(layerCtl.size.input, { min: smin, max: smax, step: sstep });
-  if (form === 'cumuliform' && layerParams.cover > 7 / 8) layerParams.cover = 7 / 8;
+  if (form === 'cumuliform' && layerParams.octas === 8) layerParams.octas = 7;
   syncLayerChips();
   dirty = true;
 }
@@ -928,8 +969,18 @@ function applyFormDefaults() {
 $$('#etage button').forEach((b) => b.addEventListener('click', () => {
   if (b.dataset.etage === layerParams.etage) return;
   layerParams.etage = b.dataset.etage;
-  const to = LAYER_DEFAULTS[layerParams.etage][layerParams.form].base * FT;
-  baseTween = { from: layerParams.base, to, start: performance.now(), duration: 1500 };
+  // Map view: the same layer just moves. Seen on the dome: it also takes the
+  // new étage's typical thickness and spacing, and the solver keeps the octas.
+  const d = LAYER_DEFAULTS[layerParams.etage][layerParams.form];
+  const to = { base: d.base * FT };
+  let sizeAtEnd = null;
+  if (layerParams.coverMode === 'dome') {
+    to.thickness = d.thickness * FT;
+    if (layerParams.form === 'cumuliform') to.size = d.size;
+    else sizeAtEnd = d.size;
+  }
+  const from = Object.fromEntries(Object.keys(to).map((k) => [k, layerParams[k]]));
+  baseTween = { from, to, sizeAtEnd, start: performance.now(), duration: 1500 };
   syncLayerForm();
 }));
 $$('#form button').forEach((b) => b.addEventListener('click', () => {
@@ -1016,7 +1067,10 @@ $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
   }
   if (mode !== 'quiz') $('.skymap').classList.remove('hidden');
   if (mode === 'quiz' && !quiz.answered) $('.skymap').classList.toggle('hidden', $('#quiz-hidemap').checked);
-  if (prev !== mode) dirty = true;
+  if (prev !== mode) {
+    dirty = true;
+    if (view === 'outside' && (prev === 'layer' || mode === 'layer')) resetOutside();
+  }
 }));
 
 $$('.view-switch [data-view]').forEach((b) => b.addEventListener('click', () => {

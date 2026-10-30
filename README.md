@@ -18,8 +18,11 @@ and is hosted on GitHub Pages without a build step.
   to see how a camera-style projection distorts it.
 - **Cloud layer tab:** one horizontal cloud layer in the low, mid or high
   étage, either cumuliform (separate elements) or stratiform (a sheet with
-  gaps). The scene is drawn to scale and the layer is ray-traced from the
-  observer with Earth curvature included. It compares the layer's real
+  gaps). Coverage is picked in octas, either as seen on the dome (the clouds
+  resize to keep it as the layer changes height) or as the real map-view
+  amount. The scene is to scale: a 6 ft observer, a 100 ft dome, and the
+  clouds at their real heights. The layer is ray-traced from the observer
+  with Earth curvature included. It compares the layer's real
   map-view coverage with the coverage you would see on the dome, including the
   packing effect near the horizon. Heights are in feet by default, with a
   switch to metres.
