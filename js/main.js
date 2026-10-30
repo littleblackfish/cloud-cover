@@ -14,18 +14,24 @@ const $$ = (s) => [...document.querySelectorAll(s)];
 // ================================================================ state
 
 // shape: 'slice' (horizontal slice), 'lying' (vertical slice) or 'cap'
-// (round patch); modifier: 'none', 'cumuli' or 'strati', applied with
-// strength `amount`.
+// (round patch). form: one signed number for how the shape is broken up:
+// negative = cumuli, positive = strati, 0 = a plain shape; its size is the
+// strength. modifier and amount are derived from it (see setForm).
 const shapeParams = {
   octas: 3, shape: 'slice', azimuth: 0, centerElevation: 90, sliceElevation: 0,
-  modifier: 'strati', amount: 0.3, time: 0, seed: 1, animate: true,
+  form: 0.3, modifier: 'strati', amount: 0.3, time: 0, seed: 1, animate: true,
 };
+function setForm(p, v) {
+  p.form = v;
+  p.modifier = v < 0 ? 'cumuli' : v > 0 ? 'strati' : 'none';
+  p.amount = Math.abs(v);
+}
 // The cloud layer uses the same shapes, broken up by a texture on the layer
 // itself; size is the texture's scale in metres (element spacing or patch
 // size), typical for the étage.
 const layerParams = {
   etage: 'low', shape: 'slice', azimuth: 0, centerElevation: 90, sliceElevation: 0,
-  modifier: 'cumuli', amount: 2, octas: 3,
+  form: -2, modifier: 'cumuli', amount: 2, octas: 3,
   base: 4000 * FT, size: 1000, seed: 1, showClouds: true,
 };
 let quizParams = null;
@@ -35,6 +41,7 @@ let mode = 'octas'; // 'octas' | 'layer' | 'quiz'
 let view = 'outside';
 let guides = 'lying';
 let dirty = true;
+let needsRender = true; // draw the next frame (see frame())
 
 // ================================================================ transitions
 //
@@ -712,12 +719,14 @@ canvas.addEventListener('pointermove', (ev) => {
   look.pitch += (ev.clientY - look.drag.y) * k;
   look.pitch = Math.max(-15 * DEG, Math.min(89.9 * DEG, look.pitch));
   look.drag = { x: ev.clientX, y: ev.clientY };
+  needsRender = true;
 });
 canvas.addEventListener('pointerup', () => { look.drag = null; });
 canvas.addEventListener('wheel', (ev) => {
   if (view !== 'inside') return;
   ev.preventDefault();
   look.fov = Math.max(30, Math.min(120, look.fov + ev.deltaY * 0.05));
+  needsRender = true;
 }, { passive: false });
 
 function updateInsideCamera() {
@@ -732,6 +741,7 @@ function resize() {
   renderer.setSize(r.width, r.height, false);
   camera.aspect = r.width / Math.max(1, r.height);
   camera.updateProjectionMatrix();
+  needsRender = true;
 }
 new ResizeObserver(resize).observe(canvas.parentElement);
 
@@ -997,7 +1007,9 @@ function frame(now) {
   if (dirty) {
     dirty = false;
     recompute();
+    needsRender = true;
   }
+  if (tweens.size || camFlying || baseTween) needsRender = true;
   if (!camFlying && view === 'outside' && mode === 'layer') {
     // follow the cloud base: scale the view about the observer as it rises
     // or falls, keeping the angle the user chose
@@ -1012,9 +1024,14 @@ function frame(now) {
   }
   if (!camFlying) {
     if (view === 'inside') updateInsideCamera();
-    else orbit.update();
+    else if (orbit.update()) needsRender = true; // true while moving or easing
   }
-  renderer.render(scene, camera);
+  // Only draw when something changed: the cloud layer is costly per pixel,
+  // and a still scene needs no redrawing.
+  if (needsRender) {
+    needsRender = false;
+    renderer.render(scene, camera);
+  }
   requestAnimationFrame(frame);
 }
 
@@ -1044,7 +1061,30 @@ const octasCtl = bindRange('octas', shapeParams, 'octas', (v) => (Number.isInteg
 bindRange('azimuth', shapeParams, 'azimuth', (v) => `${v}°`);
 bindRange('centre', shapeParams, 'centerElevation', (v) => `${v}°`);
 bindRange('axis', shapeParams, 'sliceElevation', (v) => `${v}°`);
-bindRange('deform', shapeParams, 'amount', (v) => (v === 0 ? 'none' : v.toFixed(2)));
+// The Form slider: cumuli to the left, strati to the right, none in the
+// middle. Values near the middle snap to exactly zero, so it is easy to find.
+const fmtForm = (v) => (v < 0 ? `cumuli ${(-v).toFixed(2)}` : v > 0 ? `strati ${v.toFixed(2)}` : 'none');
+function bindForm(id, p, after) {
+  const input = $(`#${id}`);
+  const out = $(`#${id}-out`);
+  const snap = 0.06 * parseFloat(input.max);
+  const show = () => { input.value = p.form; out.textContent = fmtForm(p.form); };
+  input.addEventListener('input', () => {
+    let v = parseFloat(input.value);
+    if (Math.abs(v) < snap) {
+      v = 0;
+      input.value = 0;
+    }
+    const was = p.modifier;
+    setForm(p, v);
+    out.textContent = fmtForm(v);
+    after?.(was);
+    dirty = true;
+  });
+  show();
+  return { input, set: (v) => { setForm(p, v); show(); } };
+}
+bindForm('form', shapeParams);
 
 const chips = $('#octa-chips');
 for (let k = 0; k <= 8; k++) {
@@ -1065,20 +1105,11 @@ const shapeHelp = {
 };
 function syncShape() {
   $$('#shape button').forEach((b) => b.classList.toggle('on', b.dataset.shape === shapeParams.shape));
-  $$('#modifier button').forEach((b) => b.classList.toggle('on', b.dataset.mod === shapeParams.modifier));
   $('#shape-help').textContent = shapeHelp[shapeParams.shape];
   const s = shapeParams.shape;
   $('#f-centre').hidden = s !== 'cap';
   $('#f-axis').hidden = s !== 'lying';
-  $('#f-deform').hidden = shapeParams.modifier === 'none';
 }
-$$('#modifier button').forEach((b) => b.addEventListener('click', () => {
-  if (b.dataset.mod === shapeParams.modifier) return;
-  startMorph();
-  shapeParams.modifier = b.dataset.mod;
-  syncShape();
-  dirty = true;
-}));
 function setGuides(g) {
   guides = g;
   $$('#guides button').forEach((x) => x.classList.toggle('on', x.dataset.guides === g));
@@ -1148,8 +1179,15 @@ const layerCtl = {
   azimuth: bindRange('laz', layerParams, 'azimuth', (v) => `${v}°`),
   centre: bindRange('lcentre', layerParams, 'centerElevation', (v) => `${v}°`),
   slice: bindRange('lslice', layerParams, 'sliceElevation', (v) => `${v}°`),
-  amount: bindRange('lamount', layerParams, 'amount', (v) => (v === 0 ? 'none' : v.toFixed(2))),
 };
+// Form: switching between cumuli and strati happens at zero strength, so the
+// texture's size can change there unseen.
+layerCtl.form = bindForm('lform', layerParams, (was) => {
+  if (layerParams.modifier !== was && !baseTween) {
+    layerParams.size = TEX_SIZE[layerParams.etage][layerParams.modifier];
+  }
+  syncLayerControls();
+});
 
 // Coverage seen on the dome, in whole octas.
 const lchips = $('#lcover-chips');
@@ -1220,16 +1258,12 @@ function syncLayerControls() {
   const { etage, modifier, shape } = layerParams;
   $$('#etage button').forEach((b) => b.classList.toggle('on', b.dataset.etage === etage));
   $$('#lshape button').forEach((b) => b.classList.toggle('on', b.dataset.shape === shape));
-  $$('#lmod button').forEach((b) => {
-    b.classList.toggle('on', b.dataset.mod === modifier);
-    b.disabled = etage === 'high' && b.dataset.mod === 'cumuli';
-    b.title = b.disabled ? 'No cumuliform clouds in the high étage here' : '';
-  });
+  // no cumuli in the high étage: the slider stops at the middle
+  layerCtl.form.input.min = etage === 'high' ? 0 : -3;
   $('#genus').textContent = `Typical: ${GENUS[etage][modifier]}`;
   $('#lshape-help').textContent = layerShapeHelp[shape];
   $('#f-lcentre').hidden = shape !== 'cap';
   $('#f-lslice').hidden = shape !== 'lying';
-  $('#f-lamount').hidden = modifier === 'none';
   layerCtl.base.sync();
   syncLayerChips();
   dirty = true;
@@ -1238,13 +1272,16 @@ $$('#etage button').forEach((b) => b.addEventListener('click', () => {
   if (b.dataset.etage === layerParams.etage) return;
   layerParams.etage = b.dataset.etage;
   const to = { base: ETAGE_BASE_FT[layerParams.etage] * FT };
-  if (layerParams.etage === 'high' && layerParams.modifier === 'cumuli') {
-    // no cumuli up there: fade to a sheet while the layer rises
-    swapLayer(() => {
-      layerParams.modifier = 'strati';
-      layerParams.size = TEX_SIZE.high.strati;
-      syncLayerControls();
-    });
+  if (layerParams.etage === 'high' && layerParams.form < 0) {
+    // no cumuli up there: slide the form over to strati while the layer
+    // rises (it passes through zero, so the texture changes unseen)
+    const f0 = layerParams.form;
+    animate('lform', 1500, (e) => {
+      const was = layerParams.modifier;
+      layerCtl.form.set(f0 + (2 - f0) * e);
+      if (layerParams.modifier !== was) layerParams.size = TEX_SIZE.high[layerParams.modifier];
+      dirty = true;
+    }, syncLayerControls);
   } else {
     to.size = TEX_SIZE[layerParams.etage][layerParams.modifier];
   }
@@ -1253,15 +1290,6 @@ $$('#etage button').forEach((b) => b.addEventListener('click', () => {
   const from = Object.fromEntries(Object.keys(to).map((k) => [k, layerParams[k]]));
   baseTween = { from, to, start: performance.now(), duration: 1500 };
   syncLayerControls();
-}));
-$$('#lmod button').forEach((b) => b.addEventListener('click', () => {
-  if (b.dataset.mod === layerParams.modifier || b.disabled) return;
-  $$('#lmod button').forEach((x) => x.classList.toggle('on', x === b));
-  swapLayer(() => {
-    layerParams.modifier = b.dataset.mod;
-    layerParams.size = TEX_SIZE[layerParams.etage][layerParams.modifier];
-    syncLayerControls();
-  });
 }));
 $$('#lshape button').forEach((b) => b.addEventListener('click', () => {
   if (b.dataset.shape === layerParams.shape) return;
@@ -1303,6 +1331,7 @@ function newQuiz() {
     sliceElevation: rnd() * 180,
     modifier: mods[Math.floor(rnd() * mods.length)],
     amount: 0.3 + rnd() * 0.9,
+    form: 0, // unused by the quiz; modifier and amount are set directly
     time: 0,
     seed: 1 + Math.floor(rnd() * 1e6),
   };

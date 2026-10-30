@@ -81,18 +81,12 @@
             <input type="range" id="centre" min="0" max="90" step="1" value="90">
           </label>
         </div>
-        <fieldset class="field">
-          <legend>Modifier (coverage stays fixed)</legend>
-          <div class="seg" id="modifier">
-            <button data-mod="none">None</button>
-            <button data-mod="cumuli">Cumuli</button>
-            <button data-mod="strati" class="on">Strati</button>
-          </div>
-          <label class="sub-field" id="f-deform">
-            <span>Amount <output id="deform-out">0</output></span>
-            <input type="range" id="deform" min="0" max="1.5" step="0.01" value="0.3">
-          </label>
-        </fieldset>
+        <label class="field form-slider">
+          <span>Form <output id="form-out"></output></span>
+          <input type="range" id="form" min="-1.5" max="1.5" step="0.01" value="0.3" list="form-centre">
+          <div class="form-ends" aria-hidden="true"><span>Cumuli</span><span>none</span><span>Strati</span></div>
+        </label>
+        <datalist id="form-centre"><option value="0"></option></datalist>
 
         <fieldset class="field">
           <legend>Guides on the dome</legend>
@@ -153,19 +147,13 @@
             <input type="range" id="lcentre" min="0" max="90" step="1" value="90">
           </label>
         </div>
-        <fieldset class="field">
-          <legend>Modifier</legend>
-          <div class="seg" id="lmod">
-            <button data-mod="none">None</button>
-            <button data-mod="cumuli" class="on">Cumuli</button>
-            <button data-mod="strati">Strati</button>
-          </div>
-          <label class="sub-field" id="f-lamount">
-            <span>Amount <output id="lamount-out">2.00</output></span>
-            <input type="range" id="lamount" min="0" max="3" step="0.05" value="2">
-          </label>
+        <label class="field form-slider">
+          <span>Form <output id="lform-out"></output></span>
+          <input type="range" id="lform" min="-3" max="3" step="0.05" value="-2" list="lform-centre">
+          <div class="form-ends" aria-hidden="true"><span>Cumuli</span><span>none</span><span>Strati</span></div>
           <p class="help" id="genus"></p>
-        </fieldset>
+        </label>
+        <datalist id="lform-centre"><option value="0"></option></datalist>
 
         <div class="field">
           <span>Coverage <output id="lcover-out"></output></span>
