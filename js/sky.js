@@ -83,7 +83,7 @@ export function makeNoise3(seed) {
     const v = (h & 15) < 4 ? y : (h & 15) === 12 || (h & 15) === 14 ? x : z;
     return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v);
   };
-  return (x, y, z) => {
+  const noise = (x, y, z) => {
     const X = Math.floor(x) & 255, Y = Math.floor(y) & 255, Z = Math.floor(z) & 255;
     x -= Math.floor(x); y -= Math.floor(y); z -= Math.floor(z);
     const u = fade(x), v = fade(y), w = fade(z);
@@ -96,6 +96,8 @@ export function makeNoise3(seed) {
            lerp(grad(perm[AB + 1], x, y - 1, z - 1), grad(perm[BB + 1], x - 1, y - 1, z - 1), u), v),
       w);
   };
+  noise.perm = perm; // the GPU copy of this noise (cloud-layer sheets) uses the same table
+  return noise;
 }
 
 // ---------------------------------------------------------------- shapes

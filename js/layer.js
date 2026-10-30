@@ -248,7 +248,7 @@ export function sheetField({ size, seed }) {
     for (let b = 0; b < n; b++) vals[a * n + b] = field((a / n - 0.5) * span, (b / n - 0.5) * span);
   }
   vals.sort();
-  const out = { field, vals };
+  const out = { field, vals, perm: noise.perm };
   if (fieldCache.size > 30) fieldCache.clear();
   fieldCache.set(key, out);
   return out;
@@ -312,7 +312,9 @@ export function nearbyClouds(params, k, reach, limit) {
   if (geo.r <= 0) return [];
   const base = params.base * k;
   const top = (params.base + params.thickness) * k;
-  const n = Math.min(300, Math.ceil(reach / geo.s) + 1);
+  // only the nearest `limit` are wanted: a square of n cells each way holds
+  // a circle with about that many clouds
+  const n = Math.min(Math.ceil(reach / geo.s) + 1, Math.ceil(Math.sqrt(limit / (geo.p * Math.PI))) + 2);
   const out = [];
   for (let ix = -n; ix <= n; ix++) {
     for (let iy = -n; iy <= n; iy++) {

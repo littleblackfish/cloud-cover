@@ -5,7 +5,7 @@ import {
   reportedOctas, makeNoise3, mulberry32, OCTA_BAND_ELEVATIONS, vertSliceFrame, vertSliceBoundaries,
 } from './sky.js';
 import {
-  castLayer, nearbyClouds, sheetField, sheetGeometry, solvePlanCover, distanceToHeight, EARTH_R,
+  castLayer, nearbyClouds, layerGeometry, sheetField, sheetGeometry, solvePlanCover, distanceToHeight, EARTH_R,
 } from './layer.js';
 
 const DEG = Math.PI / 180;
@@ -247,25 +247,28 @@ scene.add(observer);
 // ---------------------------------------------------------------- cloud layer
 //
 // In cloud-layer mode the scene is to scale around the observer: the dome's
-// radius is 100 ft, so it sits between the observer (about 6 ft tall) and
-// the lowest possible cloud. The observer's eye is 1.7 m above the ground and
-// the scene is drawn only out to their horizon, sqrt(2 R h) = 4.65 km away,
-// with the ground and the clouds following the Earth's curve. The projection
-// on the dome includes the whole layer, out to the horizon.
+// radius is 100 ft, so it sits between the observer and the lowest possible
+// cloud. The observer's eye is 1.7 m above the ground, so the ground ends at
+// their horizon, sqrt(2 R h) = 4.65 km away. Clouds are higher, so they are
+// drawn out to where the observer's line of sight, grazing that horizon, meets
+// them. Everything follows the Earth's curve.
 
 const SCENE_M = 100 * FT; // metres per scene unit: dome radius = 100 ft
 const K = 1 / SCENE_M;
 const EYE_M = 1.7;
-const REACH_M = Math.sqrt(2 * EARTH_R * EYE_M); // distance to the horizon
+const REACH_M = Math.sqrt(2 * EARTH_R * EYE_M); // distance to the ground horizon
 const REACH = REACH_M * K;
 const GROUND_Y = -EYE_M * K; // the scene's origin is the observer's eye
 // how far the Earth's surface has curved away below the observer's level, at
 // horizontal distance d metres (scene units)
 const drop = (d) => ((d * d) / (2 * EARTH_R)) * K;
+// Farthest point at height h (m above ground) the observer can see: the line
+// of sight grazing the ground horizon, then rising to h on the far side.
+const sightRange = (h) => REACH_M + Math.sqrt(2 * EARTH_R * Math.max(0, h));
 
 // A horizontal disc of radius r (scene units) that follows the Earth's curve.
-function curvedDisc(r, segments) {
-  const g = new THREE.CircleGeometry(r, segments, 0, 2 * Math.PI);
+function curvedDisc(r, segments, rings = 48) {
+  const g = new THREE.RingGeometry(r * 1e-4, r, segments, rings);
   g.rotateX(-Math.PI / 2);
   const pos = g.attributes.position;
   for (let i = 0; i < pos.count; i++) {
@@ -274,7 +277,7 @@ function curvedDisc(r, segments) {
   return g;
 }
 
-const groundLayer = new THREE.Mesh(curvedDisc(REACH, 160), ground.material);
+const groundLayer = new THREE.Mesh(curvedDisc(REACH, 160, 8), ground.material);
 groundLayer.position.y = GROUND_Y;
 groundLayer.visible = false;
 scene.add(groundLayer);
@@ -332,7 +335,7 @@ const etageMarker = new THREE.Mesh(
   for (const ft of [6500, 20000]) {
     const y = ft * FT * K;
     const disc = new THREE.Mesh(
-      curvedDisc(REACH, 96),
+      curvedDisc(sightRange(ft * FT) * K, 96),
       new THREE.MeshBasicMaterial({ color: 0xaec6e0, transparent: true, opacity: 0.035, side: THREE.DoubleSide, depthWrite: false }),
     );
     disc.position.y = GROUND_Y + y;
@@ -367,54 +370,162 @@ cloudMesh.count = 0;
 cloudMesh.frustumCulled = false;
 scene.add(cloudMesh);
 
-// Stratiform sheet: its base and top surfaces, cut by the same holes. The
-// texture stores the cloudiness field; alphaTest at the threshold cuts the
-// holes, so changing the cover only moves the threshold.
-const SHEET_PX = 1024;
-const sheetCanvas = document.createElement('canvas');
-sheetCanvas.width = sheetCanvas.height = SHEET_PX;
-const sheetTexture = new THREE.CanvasTexture(sheetCanvas);
-const sheetMeshes = [0xd9dee5, 0xf6f7f9].map((color) => {
+// Cloud surfaces out to the line of sight. Too many elements lie out there to
+// draw each one, so the layer's base and top are drawn as curved surfaces
+// whose pattern is computed per pixel on the GPU, from the same random
+// layout the ray caster uses (the hash and noise below copy layer.js and
+// sky.js exactly). Elements: inside a disc of radius r around each lattice
+// point. Sheets: where the noise field exceeds the threshold T. Nearby
+// elements are drawn as real cylinders, and the surfaces start beyond them.
+const permTexture = new THREE.DataTexture(new Uint8Array(512), 512, 1, THREE.RedFormat, THREE.UnsignedByteType);
+let permSeed = null;
+const surfaceUniforms = {
+  sheet: { value: 0 },
+  seed: { value: 1 },
+  spacing: { value: 1000 },
+  radius: { value: 0 },
+  occupied: { value: 0.85 },
+  freq: { value: 1 / 1500 },
+  threshold: { value: 0 },
+  perm: { value: permTexture },
+  metresPerUnit: { value: SCENE_M },
+};
+const SURFACE_VERT = `
+  #include <common>
+  #include <logdepthbuf_pars_vertex>
+  uniform float metresPerUnit;
+  varying vec2 vGround; // east, north in metres
+  void main() {
+    vGround = vec2(position.x, -position.z) * metresPerUnit;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    #include <logdepthbuf_vertex>
+  }`;
+const SURFACE_FRAG = `
+  #include <logdepthbuf_pars_fragment>
+  uniform int sheet, seed;
+  uniform float spacing, radius, occupied, freq, threshold, innerRadius;
+  uniform sampler2D perm;
+  uniform vec3 color;
+  varying vec2 vGround;
+
+  // layer.js hash3
+  uvec3 hash3(int ix, int iy) {
+    uint h = (uint(ix) * 0x27d4eb2du) ^ (uint(iy) * 0x165667b1u) ^ (uint(seed) * 0x9e3779b1u);
+    h = (h ^ (h >> 15u)) * 0x85ebca6bu;
+    h = (h ^ (h >> 13u)) * 0xc2b2ae35u;
+    h ^= h >> 16u;
+    uint g = (h ^ 0x5bd1e995u) * 0x01000193u;
+    g ^= g >> 15u;
+    uint q = (g ^ 0x2545f491u) * 0x9e3779b1u;
+    q ^= q >> 13u;
+    return uvec3(h, g, q);
+  }
+  bool element(vec2 p) {
+    int ix = int(floor(p.x / spacing)), iy = int(floor(p.y / spacing));
+    for (int ox = -1; ox <= 1; ox++) for (int oy = -1; oy <= 1; oy++) {
+      uvec3 h = hash3(ix + ox, iy + oy);
+      if (float(h.x) / 4294967296.0 >= occupied) continue;
+      vec2 c = (vec2(float(ix + ox), float(iy + oy)) + vec2(h.yz) / 4294967296.0) * spacing;
+      vec2 d = c - p;
+      if (dot(d, d) <= radius * radius) return true;
+    }
+    return false;
+  }
+
+  // sky.js makeNoise3
+  int P(int i) { return int(texelFetch(perm, ivec2(i, 0), 0).r * 255.0 + 0.5); }
+  float grad(int h, float x, float y, float z) {
+    h &= 15;
+    float u = h < 8 ? x : y;
+    float v = h < 4 ? y : (h == 12 || h == 14 ? x : z);
+    return ((h & 1) == 0 ? u : -u) + ((h & 2) == 0 ? v : -v);
+  }
+  float fade(float t) { return t * t * t * (t * (t * 6.0 - 15.0) + 10.0); }
+  float noise(vec3 p) {
+    int X = int(floor(p.x)) & 255, Y = int(floor(p.y)) & 255, Z = int(floor(p.z)) & 255;
+    vec3 f = p - floor(p);
+    float u = fade(f.x), v = fade(f.y), w = fade(f.z);
+    int A = P(X) + Y, AA = P(A) + Z, AB = P(A + 1) + Z;
+    int B = P(X + 1) + Y, BA = P(B) + Z, BB = P(B + 1) + Z;
+    float x = f.x, y = f.y, z = f.z;
+    return mix(
+      mix(mix(grad(P(AA), x, y, z), grad(P(BA), x - 1.0, y, z), u),
+          mix(grad(P(AB), x, y - 1.0, z), grad(P(BB), x - 1.0, y - 1.0, z), u), v),
+      mix(mix(grad(P(AA + 1), x, y, z - 1.0), grad(P(BA + 1), x - 1.0, y, z - 1.0), u),
+          mix(grad(P(AB + 1), x, y - 1.0, z - 1.0), grad(P(BB + 1), x - 1.0, y - 1.0, z - 1.0), u), v),
+      w);
+  }
+  float field(vec2 p) {
+    vec2 q = p * freq;
+    return noise(vec3(q, 0.37)) + 0.45 * noise(vec3(q * 2.3 + vec2(17.0, 0.0), 1.7));
+  }
+
+  void main() {
+    #include <logdepthbuf_fragment>
+    if (length(vGround) < innerRadius) discard;
+    bool cloudy = sheet == 1 ? field(vGround) > threshold : element(vGround);
+    if (!cloudy) discard;
+    gl_FragColor = vec4(color, 1.0);
+  }`;
+
+// [base, top] surfaces
+const surfaces = [0xcfd5dd, 0xf4f6f9].map((hex) => {
   const m = new THREE.Mesh(
-    curvedDisc(REACH, 160),
-    new THREE.MeshBasicMaterial({ color, alphaMap: sheetTexture, alphaTest: 0.5, side: THREE.DoubleSide }),
+    new THREE.BufferGeometry(),
+    new THREE.ShaderMaterial({
+      uniforms: {
+        ...surfaceUniforms,
+        color: { value: new THREE.Color(hex) },
+        innerRadius: { value: 0 },
+      },
+      vertexShader: SURFACE_VERT,
+      fragmentShader: SURFACE_FRAG,
+      side: THREE.DoubleSide,
+    }),
   );
+  m.frustumCulled = false;
   m.visible = false;
+  m.userData.radius = 0;
   scene.add(m);
   return m;
 });
-const FIELD_LO = -1.6, FIELD_SPAN = 3.2; // field values -> 0..1 in the texture
 
-let sheetKey = '';
-function drawSheet() {
-  const { base, thickness, size, seed } = layerParams;
-  const key = `${size}|${seed}`;
-  if (key !== sheetKey) {
-    sheetKey = key;
-    const { field } = sheetField(layerParams);
-    const g = sheetCanvas.getContext('2d');
-    const img = g.createImageData(SHEET_PX, SHEET_PX);
-    for (let py = 0; py < SHEET_PX; py++) {
-      const north = (1 - ((py + 0.5) / SHEET_PX) * 2) * REACH_M;
-      for (let px = 0; px < SHEET_PX; px++) {
-        const east = (((px + 0.5) / SHEET_PX) * 2 - 1) * REACH_M;
-        const v = Math.max(0, Math.min(1, (field(east, north) - FIELD_LO) / FIELD_SPAN));
-        const o = (py * SHEET_PX + px) * 4;
-        img.data[o] = img.data[o + 1] = img.data[o + 2] = 255 * v;
-        img.data[o + 3] = 255;
-      }
-    }
-    g.putImageData(img, 0, 0);
-    sheetTexture.needsUpdate = true;
+function setSurface(m, height, reach, inner) {
+  // rebuild the curved disc only when its size changes noticeably
+  if (Math.abs(m.userData.radius - reach) > reach * 0.01) {
+    m.geometry.dispose();
+    m.geometry = curvedDisc(reach * K, 192, 64);
+    m.userData.radius = reach;
   }
-  const { T } = sheetGeometry(layerParams);
-  const test = T === -Infinity ? 0 : Math.max(0.001, (T - FIELD_LO) / FIELD_SPAN);
-  sheetMeshes.forEach((m, i) => {
-    if ((m.material.alphaTest > 0) !== (test > 0)) m.material.needsUpdate = true;
-    m.material.alphaTest = test;
-    m.position.y = GROUND_Y + (i === 0 ? base : base + thickness) * K;
-    m.visible = !(i === 1 && thickness < 20);
-  });
+  m.position.y = GROUND_Y + height * K;
+  m.material.uniforms.innerRadius.value = inner;
+  m.visible = true;
+}
+
+function updateSurfaces(inner) {
+  const p = layerParams;
+  const sheet = p.form === 'stratiform';
+  surfaceUniforms.sheet.value = sheet ? 1 : 0;
+  surfaceUniforms.seed.value = p.seed;
+  if (sheet) {
+    const { perm } = sheetField(p);
+    if (permSeed !== p.seed) {
+      permTexture.image.data.set(perm);
+      permTexture.needsUpdate = true;
+      permSeed = p.seed;
+    }
+    const { T } = sheetGeometry(p);
+    surfaceUniforms.freq.value = 1 / p.size;
+    surfaceUniforms.threshold.value = T === -Infinity ? -1e9 : T;
+  } else {
+    const geo = layerGeometry(p);
+    surfaceUniforms.spacing.value = geo.s;
+    surfaceUniforms.radius.value = geo.r;
+    surfaceUniforms.occupied.value = geo.p;
+  }
+  const limit = p.extent * 1000;
+  setSurface(surfaces[0], p.base, Math.min(limit, sightRange(p.base)), inner);
+  if (p.thickness >= 20) setSurface(surfaces[1], p.base + p.thickness, Math.min(limit, sightRange(p.base + p.thickness)), inner);
 }
 
 function updateCloudMeshes() {
@@ -426,15 +537,16 @@ function updateCloudMeshes() {
   ground.visible = !on;
   groundLayer.visible = on;
   cloudMesh.count = 0;
-  sheetMeshes.forEach((m) => { m.visible = false; });
+  surfaces.forEach((m) => { m.visible = false; });
   if (!on) return;
   updateEtageDecor();
   if (!layerParams.showClouds || layerParams.cover <= 0) return;
   if (layerParams.form === 'stratiform') {
-    drawSheet();
+    updateSurfaces(0);
     return;
   }
-  const list = nearbyClouds(layerParams, K, REACH_M, MAX_CLOUDS);
+  const reach = Math.min(layerParams.extent * 1000, sightRange(layerParams.base + layerParams.thickness));
+  const list = nearbyClouds(layerParams, K, reach, MAX_CLOUDS);
   const m = new THREE.Matrix4();
   list.forEach((c, i) => {
     const h = c.top - c.base;
@@ -444,6 +556,8 @@ function updateCloudMeshes() {
   });
   cloudMesh.count = list.length;
   cloudMesh.instanceMatrix.needsUpdate = true;
+  // beyond the farthest cylinder, the base and top surfaces take over
+  if (list.length === MAX_CLOUDS) updateSurfaces(list[list.length - 1].d);
 }
 
 // ================================================================ cameras
@@ -476,7 +590,7 @@ function setView(v, { yaw } = {}) {
 function resetOutside() {
   if (mode === 'layer') {
     // low, looking up: the 100 ft dome in front, the cloud layer above
-    orbit.maxDistance = 600; // the drawn scene ends at the horizon, 152 units out
+    orbit.maxDistance = 20000; // far enough to see the whole layer, out to the line of sight
     orbit.maxPolarAngle = Math.PI / 2 - 0.01; // stay above the ground
     camera.fov = 60;
     camera.position.set(7, 2.6, 8.5);
