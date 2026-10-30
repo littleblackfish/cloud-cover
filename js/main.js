@@ -4,7 +4,7 @@ import {
   W, H, N, grid, computeField, solveThreshold, coverFromField,
   reportedOctas, makeNoise3, mulberry32, vertSliceFrame, vertSliceCentre, patchCentre,
 } from './sky.js';
-import { layerField, EARTH_R, P_OCC, ELEMENT_R } from './layer.js';
+import { layerField, layerArea, EARTH_R, P_OCC, ELEMENT_R } from './layer.js';
 
 const DEG = Math.PI / 180;
 const FT = 0.3048; // metres per foot
@@ -919,13 +919,22 @@ function updateReadout() {
     return;
   }
   const rep = reportedOctas(coveredFrac);
-  {
-    el.innerHTML = `<div class="dim">Report</div>
-      <div class="big">${rep} / 8</div>
-      <div>${fmtOctas(coveredFrac)} octas exactly</div>
-      <div class="dim">${(coveredFrac * 100).toFixed(1)}% of the dome</div>`;
-  }
+  // On the cloud layer, also the cloud's real size: the same octas take a
+  // bigger cloud the higher the layer is.
+  const size = mode === 'layer' && patchArea > 0
+    ? `<div class="dim">cloud on the layer: ${fmtArea(patchArea)}
+        (as a circle, ${fmtKm(2 * Math.sqrt(patchArea / Math.PI))} across)</div>`
+    : '';
+  el.innerHTML = `<div class="dim">Report</div>
+    <div class="big">${rep} / 8</div>
+    <div>${fmtOctas(coveredFrac)} octas exactly</div>
+    <div class="dim">${(coveredFrac * 100).toFixed(1)}% of the dome</div>${size}`;
 }
+let patchArea = 0;
+const fmtArea = (m2) => {
+  const km2 = m2 / 1e6;
+  return `${km2 >= 100 ? Math.round(km2).toLocaleString('en-CA') : km2 >= 10 ? km2.toFixed(0) : km2.toFixed(1)} km²`;
+};
 
 
 // ================================================================ update loop
@@ -975,6 +984,7 @@ function recompute() {
     }, field);
     layerThreshold = solveThreshold(field, layerOctasShown / 8);
     coveredFrac = coverFromField(field, layerThreshold, cover);
+    patchArea = layerArea(cover, Math.max(1, layerParams.base - EYE_M));
     paintDome(false);
     updateCloudMeshes();
   } else {

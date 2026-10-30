@@ -95,3 +95,21 @@ export function layerField(params, out) {
   }
   return out;
 }
+
+// Area (m^2) of the layer that the covered sky cells look at. A grid row
+// between elevations e0 < e1 sees the ring of the layer between horizontal
+// distances d(e1) and d(e0), so each cell's share is (d0^2 - d1^2)/2 x its
+// width in azimuth. cover holds each cell's covered fraction.
+export function layerArea(cover, height) {
+  const dphi = (2 * Math.PI) / W;
+  let area = 0;
+  for (let j = 0; j < H; j++) {
+    const dNear = distanceToHeight(((j + 1) / H) * (Math.PI / 2), height);
+    const dFar = distanceToHeight((j / H) * (Math.PI / 2), height);
+    const ring = ((dFar * dFar - dNear * dNear) / 2) * dphi;
+    let row = 0;
+    for (let i = 0; i < W; i++) row += cover[j * W + i];
+    area += row * ring;
+  }
+  return area;
+}
