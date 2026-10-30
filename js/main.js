@@ -30,7 +30,7 @@ function setForm(p, v) {
 // itself; size is the texture's scale in metres (element spacing or patch
 // size), typical for the étage.
 const layerParams = {
-  etage: 'low', shape: 'slice', azimuth: 0, centerElevation: 90, sliceElevation: 0,
+  etage: 'low', shape: 'cap', azimuth: 0, centerElevation: 90, sliceElevation: 0, // round patch only
   form: -2, modifier: 'cumuli', amount: 2, octas: 3,
   base: 4000 * FT, size: 1000, seed: 1, showClouds: true,
 };
@@ -528,6 +528,7 @@ const SURFACE_VERT = `
 const SURFACE_FRAG = `
   #include <logdepthbuf_pars_fragment>
   uniform vec3 color;
+  uniform float metresPerUnit; // also the dome's radius in metres
   varying vec2 vGround;
   ${LAYER_GLSL}
   void main() {
@@ -538,7 +539,9 @@ const SURFACE_FRAG = `
     float r = region(s), rw = fwidth(r);
     float a = s.z < 0.0 ? 0.0 : layerCloud(r, rw, vGround, dFdx(vGround), dFdy(vGround));
     if (a < 0.01) discard;
-    gl_FragColor = vec4(color, 0.95 * a);
+    // full brightness inside the dome, dimming with distance beyond it
+    float far = smoothstep(1.0, 4.0, length(vec3(vGround, layerHeight)) / metresPerUnit);
+    gl_FragColor = vec4(color * mix(1.0, 0.6, far), mix(0.95, 0.75, far) * a);
   }`;
 const layerSurface = new THREE.Mesh(
   new THREE.BufferGeometry(),
@@ -648,6 +651,7 @@ function setOrbitLimits() {
   }
 }
 function flyTo(pos, target, fov, ms, done) {
+  needsRender = true; // an instant move still has to be drawn
   const p0 = camera.position.clone();
   const f = new THREE.Vector3();
   camera.getWorldDirection(f);
@@ -1026,6 +1030,10 @@ function frame(now) {
     if (view === 'inside') updateInsideCamera();
     else if (orbit.update()) needsRender = true; // true while moving or easing
   }
+  // From outside, draw the layer over the dome's tinted shell, so the clouds
+  // inside the dome are not darkened by it; from inside, the dome's own cloud
+  // pattern goes on top.
+  layerSurface.renderOrder = view === 'outside' ? 3 : 1;
   // Only draw when something changed: the cloud layer is costly per pixel,
   // and a still scene needs no redrawing.
   if (needsRender) {
@@ -1178,7 +1186,6 @@ const layerCtl = {
   base: bindHeight('lbase', 'base'),
   azimuth: bindRange('laz', layerParams, 'azimuth', (v) => `${v}°`),
   centre: bindRange('lcentre', layerParams, 'centerElevation', (v) => `${v}°`),
-  slice: bindRange('lslice', layerParams, 'sliceElevation', (v) => `${v}°`),
 };
 // Form: switching between cumuli and strati happens at zero strength, so the
 // texture's size can change there unseen.
@@ -1248,22 +1255,13 @@ const GENUS = {
     strati: 'Cirrostratus (Cs) or cirrus (Ci): a thin veil or wisps. A thin veil can cover much of the sky while hiding little.',
   },
 };
-const layerShapeHelp = {
-  slice: 'On the layer, a wedge spreading out from overhead.',
-  lying: 'On the layer, a straight strip running north–south; elevation moves it across the sky.',
-  cap: 'On the layer, a round patch; lower its centre and it becomes a long oval far off.',
-};
 
 function syncLayerControls() {
-  const { etage, modifier, shape } = layerParams;
+  const { etage, modifier } = layerParams;
   $$('#etage button').forEach((b) => b.classList.toggle('on', b.dataset.etage === etage));
-  $$('#lshape button').forEach((b) => b.classList.toggle('on', b.dataset.shape === shape));
   // no cumuli in the high étage: the slider stops at the middle
   layerCtl.form.input.min = etage === 'high' ? 0 : -3;
   $('#genus').textContent = `Typical: ${GENUS[etage][modifier]}`;
-  $('#lshape-help').textContent = layerShapeHelp[shape];
-  $('#f-lcentre').hidden = shape !== 'cap';
-  $('#f-lslice').hidden = shape !== 'lying';
   layerCtl.base.sync();
   syncLayerChips();
   dirty = true;
@@ -1290,14 +1288,6 @@ $$('#etage button').forEach((b) => b.addEventListener('click', () => {
   const from = Object.fromEntries(Object.keys(to).map((k) => [k, layerParams[k]]));
   baseTween = { from, to, start: performance.now(), duration: 1500 };
   syncLayerControls();
-}));
-$$('#lshape button').forEach((b) => b.addEventListener('click', () => {
-  if (b.dataset.shape === layerParams.shape) return;
-  $$('#lshape button').forEach((x) => x.classList.toggle('on', x === b));
-  swapLayer(() => {
-    layerParams.shape = b.dataset.shape;
-    syncLayerControls();
-  });
 }));
 syncLayerControls();
 
@@ -1340,8 +1330,8 @@ function newQuiz() {
   quiz.answered = false;
   [...answers.children].forEach((b) => { b.disabled = false; b.className = ''; });
   $('#quiz-result').textContent = '';
-  if ($('#quiz-inside').checked) setView('inside', { yaw: rnd() * 2 * Math.PI });
-  $('.skymap').classList.toggle('hidden', $('#quiz-hidemap').checked);
+  setView('inside', { yaw: rnd() * 2 * Math.PI });
+  syncQuizLock();
   dirty = true;
 }
 
@@ -1362,7 +1352,7 @@ function answerQuiz(k) {
     ? `<span class="ok">Correct.</span> ${fmtOctas(coveredFrac)} octas exactly, reported as ${truth}.`
     : `<span class="no">${off > 0 ? 'Too high' : 'Too low'} by ${Math.abs(off)}.</span> ${fmtOctas(coveredFrac)} octas exactly, reported as ${truth}.`;
   $('#quiz-score').textContent = `Score ${quiz.right} / ${quiz.total} · streak ${quiz.streak}`;
-  $('.skymap').classList.remove('hidden');
+  syncQuizLock();
   updateReadout();
 }
 $('#quiz-new').addEventListener('click', newQuiz);
@@ -1370,6 +1360,15 @@ $('#quiz-new').addEventListener('click', newQuiz);
 // ---------------------------------------------------------------- tabs, view
 
 const canvasFade = (o) => { canvas.style.opacity = o; };
+// Until a quiz sky is answered the observer stays inside the dome, and the
+// sky map (which would give the answer away) stays hidden.
+function syncQuizLock() {
+  const locked = mode === 'quiz' && !quiz.answered;
+  const out = $('.view-switch [data-view="outside"]');
+  out.disabled = locked;
+  out.title = locked ? 'Answer first: then you can step outside' : '';
+  $('.skymap').classList.toggle('hidden', locked);
+}
 const syncFreeze = () => { $('#freeze').hidden = mode !== 'octas'; };
 $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
   const tab = b.dataset.tab;
@@ -1378,10 +1377,6 @@ $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
   const prev = mode;
   let next = mode;
   if (tab === 'octas' || tab === 'layer' || tab === 'quiz') next = tab;
-  const syncMap = () => {
-    const hide = mode === 'quiz' && !quiz.answered && $('#quiz-hidemap').checked;
-    $('.skymap').classList.toggle('hidden', hide);
-  };
   if (next === prev) return;
   if ((prev === 'layer') === (next === 'layer')) {
     // octas <-> quiz: same scene, so the sky morphs from one to the other
@@ -1389,7 +1384,8 @@ $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
     mode = next;
     if (mode === 'quiz' && !quizParams) newQuiz();
     else easeOctasTo(mode === 'quiz' ? quizParams.octas : shapeParams.octas);
-    syncMap();
+    if (mode === 'quiz' && !quiz.answered && view === 'outside') setView('inside');
+    syncQuizLock();
     syncFreeze();
     dirty = true;
     return;
@@ -1402,9 +1398,11 @@ $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
     octasShown = mode === 'quiz' ? quizParams.octas : shapeParams.octas;
     morph = null;
     tweens.delete('octas');
-    if (view === 'outside') setView('outside', { reset: true, instant: true });
+    if (mode === 'quiz' && !quiz.answered) setView('inside', { instant: true });
+    else if (view === 'outside') setView('outside', { reset: true, instant: true });
     recompute();
-    syncMap();
+    needsRender = true;
+    syncQuizLock();
     syncFreeze();
     canvasFade(1);
   }, REDUCED_MOTION ? 0 : 250);

@@ -109,9 +109,8 @@
           low ones inside the dome, higher ones above it. They are drawn out to
           where the observer's line of sight, grazing the horizon, still
           reaches them: about 130 km for a 4,000 ft layer. Everything follows
-          the Earth's curve. The layer holds the same shapes as the Octas tab,
-          and cumuli or strati break them up on the layer itself, so
-          perspective squeezes them toward the horizon. Each étage has its own
+          the Earth's curve. Cumuli or strati break the cloud up on the layer
+          itself, so perspective squeezes them toward the horizon. Each étage has its own
           shade: low clouds greyest, high clouds nearly white. The view pulls
           back as the layer rises.
         </p>
@@ -124,23 +123,15 @@
             <button data-etage="high">High <small>20,000 ft +</small></button>
           </div>
         </fieldset>
-        <fieldset class="field">
-          <legend>Shape</legend>
-          <div class="seg" id="lshape">
-            <button data-shape="slice" class="on">Horizontal slice</button>
-            <button data-shape="lying">Vertical slice</button>
-            <button data-shape="cap">Round patch</button>
-          </div>
-          <p class="help" id="lshape-help"></p>
-        </fieldset>
+        <p class="help">
+          The cloud is a round patch of the layer. Azimuth and elevation place
+          its centre in your sky; lower it and the patch becomes a long oval
+          far off.
+        </p>
         <div class="pair">
           <label class="field">
             <span>Azimuth <output id="laz-out">0°</output></span>
             <input type="range" id="laz" min="0" max="359" step="1" value="0">
-          </label>
-          <label class="field" id="f-lslice">
-            <span>Elevation <output id="lslice-out">0°</output></span>
-            <input type="range" id="lslice" min="0" max="180" step="1" value="0">
           </label>
           <label class="field" id="f-lcentre">
             <span>Elevation <output id="lcentre-out">90°</output></span>
@@ -196,13 +187,12 @@
       <!-- ===================================================== QUIZ -->
       <section class="tab" id="tab-quiz" hidden>
         <p class="help">
-          A random sky is drawn. Estimate the amount, then check.
-          Tip: try it from <em>Inside</em>, the view you get in the field.
+          A random sky is drawn around you, as you would see it in the field.
+          Estimate the amount, then check. The outside view and the sky map
+          open once you have answered.
         </p>
         <div class="row">
           <button id="quiz-new" class="primary">New sky</button>
-          <label class="check"><input type="checkbox" id="quiz-inside" checked> Put me inside</label>
-          <label class="check"><input type="checkbox" id="quiz-hidemap" checked> Hide sky map</label>
         </div>
         <div class="chips answer" id="quiz-answers"></div>
         <p class="quiz-result" id="quiz-result" aria-live="polite"></p>
