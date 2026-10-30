@@ -126,12 +126,6 @@
             <input type="range" id="lcentre" min="0" max="180" step="1" value="25">
           </label>
         </div>
-        <label class="field form-slider">
-          <span>Form <output id="lform-out"></output></span>
-          <input type="range" id="lform" min="-3" max="3" step="0.05" value="0.3" list="lform-centre">
-          <div class="form-ends" aria-hidden="true"><span>Cumuli</span><span>none</span><span>Strati</span></div>
-        </label>
-        <datalist id="lform-centre"><option value="0"></option></datalist>
 
         <div class="field units">
           <span>Heights in</span>
@@ -144,18 +138,15 @@
           <span>Cloud base height <output id="lbase-out"></output></span>
           <input type="range" id="lbase" min="300" max="6500" step="100" value="4000">
         </label>
-        <div class="row">
-          <label class="check"><input type="checkbox" id="lshow" checked> Show the layer in 3D</label>
-          <button id="lreseed">Reshuffle</button>
-        </div>
 
         <div class="notes-bottom">
           <p class="help" id="genus"></p>
           <p class="help">
-            The cloud is a round patch of the layer, placed in your sky by
-            azimuth and elevation (past 90° it crosses the zenith); lower it
-            and the patch becomes a long oval far off. Coverage is the octas
-            seen on the dome, held exactly as the layer changes height.
+            The layer is a flat plane parallel to the ground (shown faintly),
+            and the cloud is one flat round patch on it, placed in your sky by
+            azimuth and elevation (past 90° it crosses the zenith). Lower it
+            and the patch becomes a long oval far off. The patch is sized so
+            it covers exactly the chosen octas of the dome, at any height.
           </p>
           <p class="help">
             One cloud layer, parallel to the ground, seen by the observer at
@@ -165,9 +156,8 @@
             their real heights: low ones inside the dome, higher ones above
             it. They are drawn out to where the observer's line of sight,
             grazing the horizon, still reaches them: about 130 km for a
-            4,000 ft layer. Everything follows the Earth's curve. Cumuli or
-            strati break the cloud up on the layer itself, so perspective
-            squeezes them toward the horizon. Each étage has its own shade:
+            4,000 ft layer. Everything follows the Earth's curve. Each étage
+            has its own shade:
             low clouds greyest, high clouds nearly white. The view pulls back
             as the layer rises.
           </p>

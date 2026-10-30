@@ -26,13 +26,12 @@ function setForm(p, v) {
   p.modifier = v < 0 ? 'cumuli' : v > 0 ? 'strati' : 'none';
   p.amount = Math.abs(v);
 }
-// The cloud layer uses the same shapes, broken up by a texture on the layer
-// itself; size is the texture's scale in metres (element spacing or patch
-// size), typical for the étage.
+// The cloud layer is kept to plain geometry: one flat round patch on a flat
+// layer, no texture.
 const layerParams = {
   etage: 'low', shape: 'cap', azimuth: 90, elevation: 25, // round patch only
-  form: 0.3, modifier: 'strati', amount: 0.3, octas: 3,
-  base: 4000 * FT, size: 2000, seed: 1, showClouds: true,
+  form: 0, modifier: 'none', amount: 0, octas: 3,
+  base: 4000 * FT, size: 1000, seed: 1,
 };
 let quizParams = null;
 const quiz = { answered: false, right: 0, total: 0, streak: 0 };
@@ -542,10 +541,11 @@ const SURFACE_FRAG = `
     vec3 s = normalize(vec3(vGround, layerHeight - d * d / 12742000.0));
     float r = region(s), rw = fwidth(r);
     float a = s.z < 0.0 ? 0.0 : layerCloud(r, rw, vGround, dFdx(vGround), dFdy(vGround));
-    if (a < 0.01) discard;
-    // full brightness inside the dome, dimming with distance beyond it
+    // The layer itself is a faint plane; the cloud patch on it is solid.
+    // Full brightness inside the dome, dimming with distance beyond it.
     float far = smoothstep(1.0, 4.0, length(vec3(vGround, layerHeight)) / metresPerUnit);
-    gl_FragColor = vec4(color * mix(1.0, 0.6, far), mix(0.95, 0.75, far) * a);
+    vec3 c = mix(vec3(0.5, 0.58, 0.68), color, a) * mix(1.0, 0.6, far);
+    gl_FragColor = vec4(c, mix(0.06, mix(0.95, 0.75, far), a));
   }`;
 const layerSurface = new THREE.Mesh(
   new THREE.BufferGeometry(),
@@ -603,7 +603,6 @@ function updateCloudMeshes() {
   layerSurface.visible = false;
   if (!on) return;
   updatePattern();
-  if (!layerParams.showClouds || layerOctasShown <= 0) return;
   const reach = sightRange(layerParams.base);
   // rebuild the curved disc only when its size changes noticeably
   if (Math.abs(layerSurface.userData.radius - reach) > reach * 0.01) {
@@ -1178,15 +1177,6 @@ const layerCtl = {
   azimuth: bindRange('laz', layerParams, 'azimuth', (v) => `${v}°`),
   centre: bindRange('lcentre', layerParams, 'elevation', (v) => `${v}°`),
 };
-// Form: switching between cumuli and strati happens at zero strength, so the
-// texture's size can change there unseen.
-layerCtl.form = bindForm('lform', layerParams, (was) => {
-  if (layerParams.modifier !== was && !baseTween) {
-    layerParams.size = TEX_SIZE[layerParams.etage][layerParams.modifier];
-  }
-  syncLayerControls();
-});
-
 // Coverage seen on the dome, in whole octas.
 const lchips = $('#lcover-chips');
 for (let k = 0; k <= 8; k++) {
@@ -1200,16 +1190,6 @@ for (let k = 0; k <= 8; k++) {
   });
   lchips.append(b);
 }
-// Swap the layer for a different one (form, random pattern): the clouds fade
-// out, the change is made, and they fade back in.
-function swapLayer(change) {
-  const f0 = layerUniforms.layerFade.value;
-  animate('layerFade', 250 * f0, (e) => { layerUniforms.layerFade.value = f0 * (1 - e); }, () => {
-    change();
-    dirty = true;
-    animate('layerFade', 350, (e) => { layerUniforms.layerFade.value = e; });
-  });
-}
 function syncLayerChips() {
   [...lchips.children].forEach((b, k) => b.classList.toggle('on', layerParams.octas === k));
   $('#lcover-out').textContent = `${layerParams.octas}/8`;
@@ -1219,40 +1199,19 @@ $$('#units button').forEach((b) => b.addEventListener('click', () => {
   $$('#units button').forEach((x) => x.classList.toggle('on', x === b));
   layerCtl.base.sync();
 }));
-$('#lshow').addEventListener('change', (e) => { layerParams.showClouds = e.target.checked; dirty = true; });
-$('#lreseed').addEventListener('click', () => swapLayer(() => { layerParams.seed = 1 + Math.floor(Math.random() * 1e6); }));
 
-// Typical base for each étage (ft), and texture size (m): element spacing for
-// cumuli, patch size for strati. No cumuli in the high étage.
+// Typical base for each étage (ft), and the clouds you would find there.
 const ETAGE_BASE_FT = { low: 4000, mid: 12000, high: 28000 };
-const TEX_SIZE = {
-  low: { none: 1000, cumuli: 1000, strati: 2000 },
-  mid: { none: 600, cumuli: 600, strati: 8000 },
-  high: { none: 10000, cumuli: 10000, strati: 10000 },
-};
 const GENUS = {
-  low: {
-    none: 'A plain shape, to see how the layer maps onto the dome.',
-    cumuli: 'Cumulus (Cu). Towering cumulus (TCU) and cumulonimbus (Cb) have low bases too, even when their tops reach the high étage.',
-    strati: 'Stratus (St) or a stratocumulus (Sc) sheet. Nimbostratus (Ns) bases are often low too.',
-  },
-  mid: {
-    none: 'A plain shape, to see how the layer maps onto the dome.',
-    cumuli: 'Altocumulus (Ac): small rounded elements, often in rows or patches.',
-    strati: 'Altostratus (As): a grey or bluish sheet; the sun may show as through ground glass.',
-  },
-  high: {
-    none: 'A plain shape, to see how the layer maps onto the dome.',
-    strati: 'Cirrostratus (Cs) or cirrus (Ci): a thin veil or wisps. A thin veil can cover much of the sky while hiding little.',
-  },
+  low: 'Low étage: cumulus (Cu), stratocumulus (Sc), stratus (St); cumulonimbus (Cb) and nimbostratus (Ns) bases are low too.',
+  mid: 'Mid étage: altocumulus (Ac) and altostratus (As).',
+  high: 'High étage: cirrus (Ci), cirrocumulus (Cc) and cirrostratus (Cs).',
 };
 
 function syncLayerControls() {
-  const { etage, modifier } = layerParams;
+  const { etage } = layerParams;
   $$('#etage button').forEach((b) => b.classList.toggle('on', b.dataset.etage === etage));
-  // no cumuli in the high étage: the slider stops at the middle
-  layerCtl.form.input.min = etage === 'high' ? 0 : -3;
-  $('#genus').textContent = `Typical: ${GENUS[etage][modifier]}`;
+  $('#genus').textContent = GENUS[etage];
   layerCtl.base.sync();
   syncLayerChips();
   dirty = true;
@@ -1260,24 +1219,9 @@ function syncLayerControls() {
 $$('#etage button').forEach((b) => b.addEventListener('click', () => {
   if (b.dataset.etage === layerParams.etage) return;
   layerParams.etage = b.dataset.etage;
+  // the layer glides to a typical base for the new étage; the octas stay
   const to = { base: ETAGE_BASE_FT[layerParams.etage] * FT };
-  if (layerParams.etage === 'high' && layerParams.form < 0) {
-    // no cumuli up there: slide the form over to strati while the layer
-    // rises (it passes through zero, so the texture changes unseen)
-    const f0 = layerParams.form;
-    animate('lform', 1500, (e) => {
-      const was = layerParams.modifier;
-      layerCtl.form.set(f0 + (2 - f0) * e);
-      if (layerParams.modifier !== was) layerParams.size = TEX_SIZE.high[layerParams.modifier];
-      dirty = true;
-    }, syncLayerControls);
-  } else {
-    to.size = TEX_SIZE[layerParams.etage][layerParams.modifier];
-  }
-  // The layer glides to a typical base for the new étage, with that étage's
-  // typical texture size; the octas stay as chosen.
-  const from = Object.fromEntries(Object.keys(to).map((k) => [k, layerParams[k]]));
-  baseTween = { from, to, start: performance.now(), duration: 1500 };
+  baseTween = { from: { base: layerParams.base }, to, start: performance.now(), duration: 1500 };
   syncLayerControls();
 }));
 syncLayerControls();
@@ -1303,15 +1247,15 @@ function newQuiz() {
   else if (n === 7) frac = 6.5 / 8 + rnd() * (1.5 / 8 - 0.01);
   else frac = (n - 0.5 + rnd() * 0.999) / 8;
   const shapes = ['lying', 'cap'];
-  const mods = ['none', 'cumuli', 'cumuli', 'strati', 'strati'];
   quizParams = {
     octas: frac * 8,
     shape: shapes[Math.floor(rnd() * shapes.length)],
     azimuth: Math.floor(rnd() * 360),
     elevation: rnd() * 180,
-    modifier: mods[Math.floor(rnd() * mods.length)],
-    amount: 0.3 + rnd() * 0.9,
-    form: 0, // unused by the quiz; modifier and amount are set directly
+    // plain shapes only, for now
+    modifier: 'none',
+    amount: 0,
+    form: 0,
     time: 0,
     seed: 1 + Math.floor(rnd() * 1e6),
   };
@@ -1368,18 +1312,15 @@ $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
   let next = mode;
   if (tab === 'octas' || tab === 'layer' || tab === 'quiz') next = tab;
   if (next === prev) return;
-  // Azimuth, elevation and form are shared by the Celestial dome and Cloud
-  // layer tabs: carry them over (no cumuli in the high étage).
+  // Azimuth and elevation are shared by the Celestial dome and Cloud layer
+  // tabs: carry them over.
   if (next === 'layer') {
     layerCtl.azimuth.set(shapeParams.azimuth);
     layerCtl.centre.set(shapeParams.elevation);
-    layerCtl.form.set(layerParams.etage === 'high' ? Math.max(0, shapeParams.form) : shapeParams.form);
-    layerParams.size = TEX_SIZE[layerParams.etage][layerParams.modifier];
     syncLayerControls();
   } else if (next === 'octas' && prev === 'layer') {
     domeCtl.azimuth.set(layerParams.azimuth);
     domeCtl.elevation.set(layerParams.elevation);
-    domeCtl.form.set(layerParams.form);
   }
   if ((prev === 'layer') === (next === 'layer')) {
     // octas <-> quiz: same scene, so the sky morphs from one to the other

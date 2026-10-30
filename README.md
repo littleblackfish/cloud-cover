@@ -16,16 +16,14 @@ and is hosted on GitHub Pages without a build step.
   stand at the observer's position and look around.
 - **All-sky map:** a flat map of the whole dome. In the equal-area
   projection, area on the map is proportional to octas.
-- **Cloud layer tab:** a round patch of one flat cloud layer in the low, mid
-  or high étage, broken up by cumuli or strati that sit on the layer itself,
-  so perspective squeezes them toward the horizon. Coverage is picked in
-  octas as seen on the dome and held exactly. Each étage has its own grey.
+- **Cloud layer tab:** one flat round patch on a flat cloud layer in the
+  low, mid or high étage, sized to cover exactly the chosen octas of the
+  dome. Azimuth and elevation (shared with the Celestial dome tab) place it.
   The scene is to scale and follows the Earth's curve: an observer with eyes
   1.7 m up, a dome whose radius is the distance to their horizon (4.65 km),
   the ground inside it, and the layer drawn out to the observer's line of
-  sight. The GPU draws the layer pixel by pixel from the same fields used
-  for the octa numbers.
-- **Quiz tab:** random skies to estimate from inside the dome, scored using
+  sight. Each étage has its own grey.
+- **Quiz tab:** random plain slices and patches to estimate from inside the dome, scored using
   the octa rounding rules; the outside view and sky map open after answering.
 
 ## The key geometry
