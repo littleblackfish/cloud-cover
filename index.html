@@ -67,18 +67,20 @@
           <p class="help" id="shape-help"></p>
         </fieldset>
 
-        <label class="field" id="f-azimuth">
-          <span>Direction (azimuth) <output id="azimuth-out">0°</output></span>
-          <input type="range" id="azimuth" min="0" max="359" step="1" value="0">
-        </label>
-        <label class="field" id="f-axis">
-          <span>Slice elevation <output id="axis-out">0°</output></span>
-          <input type="range" id="axis" min="0" max="180" step="1" value="0">
-        </label>
-        <label class="field" id="f-centre">
-          <span>Patch centre elevation <output id="centre-out">90°</output></span>
-          <input type="range" id="centre" min="0" max="90" step="1" value="90">
-        </label>
+        <div class="pair">
+          <label class="field" id="f-azimuth">
+            <span>Azimuth <output id="azimuth-out">0°</output></span>
+            <input type="range" id="azimuth" min="0" max="359" step="1" value="0">
+          </label>
+          <label class="field" id="f-axis">
+            <span>Elevation <output id="axis-out">0°</output></span>
+            <input type="range" id="axis" min="0" max="180" step="1" value="0">
+          </label>
+          <label class="field" id="f-centre">
+            <span>Elevation <output id="centre-out">90°</output></span>
+            <input type="range" id="centre" min="0" max="90" step="1" value="90">
+          </label>
+        </div>
         <fieldset class="field">
           <legend>Modifier (coverage stays fixed)</legend>
           <div class="seg" id="modifier">
@@ -137,18 +139,20 @@
           </div>
           <p class="help" id="lshape-help"></p>
         </fieldset>
-        <label class="field">
-          <span>Direction (azimuth) <output id="laz-out">0°</output></span>
-          <input type="range" id="laz" min="0" max="359" step="1" value="0">
-        </label>
-        <label class="field" id="f-lslice">
-          <span>Slice elevation <output id="lslice-out">0°</output></span>
-          <input type="range" id="lslice" min="0" max="180" step="1" value="0">
-        </label>
-        <label class="field" id="f-lcentre">
-          <span>Patch centre elevation <output id="lcentre-out">90°</output></span>
-          <input type="range" id="lcentre" min="0" max="90" step="1" value="90">
-        </label>
+        <div class="pair">
+          <label class="field">
+            <span>Azimuth <output id="laz-out">0°</output></span>
+            <input type="range" id="laz" min="0" max="359" step="1" value="0">
+          </label>
+          <label class="field" id="f-lslice">
+            <span>Elevation <output id="lslice-out">0°</output></span>
+            <input type="range" id="lslice" min="0" max="180" step="1" value="0">
+          </label>
+          <label class="field" id="f-lcentre">
+            <span>Elevation <output id="lcentre-out">90°</output></span>
+            <input type="range" id="lcentre" min="0" max="90" step="1" value="90">
+          </label>
+        </div>
         <fieldset class="field">
           <legend>Modifier</legend>
           <div class="seg" id="lmod">

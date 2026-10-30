@@ -356,7 +356,8 @@ function lyingArcs(a0) {
 }
 function guideSpec(g) {
   if (g === 'slices') return { circles: [], meridians: [0, 45, 90, 135, 180, 225, 270, 315], arcs: [] };
-  if (g === 'lying') return { circles: [], meridians: [], arcs: lyingArcs((mode === 'layer' ? layerParams : shapeParams).azimuth) };
+  // guides are fixed to the compass: vertical slices always run north-south
+  if (g === 'lying') return { circles: [], meridians: [], arcs: lyingArcs(0) };
   return { circles: [], meridians: [], arcs: [] };
 }
 // fade: crossfade from the old guides (button changes); sliders that move
@@ -1040,9 +1041,7 @@ const octasCtl = bindRange('octas', shapeParams, 'octas', (v) => (Number.isInteg
   octasShown = shapeParams.octas;
   syncChips();
 });
-bindRange('azimuth', shapeParams, 'azimuth', (v) => `${v}°`, () => {
-  if (guides === 'lying') buildGuides();
-});
+bindRange('azimuth', shapeParams, 'azimuth', (v) => `${v}°`);
 bindRange('centre', shapeParams, 'centerElevation', (v) => `${v}°`);
 bindRange('axis', shapeParams, 'sliceElevation', (v) => `${v}°`);
 bindRange('deform', shapeParams, 'amount', (v) => (v === 0 ? 'none' : v.toFixed(2)));
@@ -1061,7 +1060,7 @@ syncChips();
 
 const shapeHelp = {
   slice: 'Wedges from horizon to zenith. Each 45° of azimuth is exactly one octa.',
-  lying: 'The orange lies on its side. Each slice runs from the north horizon over the sky to the south horizon, a 180° arc. There are four slices on each side of the zenith, each one octa. Elevation slides the cloud up from the east horizon, over the zenith, toward the west. Direction turns the orange.',
+  lying: 'The orange lies on its side. Each slice runs from the north horizon over the sky to the south horizon, a 180° arc. There are four slices on each side of the zenith, each one octa. Elevation slides the cloud up from the east horizon, over the zenith, toward the west. Azimuth turns the orange; the guides stay north–south.',
   cap: 'A round patch. Move its centre down toward the horizon: the horizon clips it and it stretches to keep its area.',
 };
 function syncShape() {
@@ -1146,9 +1145,7 @@ function bindHeight(id, key) {
 
 const layerCtl = {
   base: bindHeight('lbase', 'base'),
-  azimuth: bindRange('laz', layerParams, 'azimuth', (v) => `${v}°`, () => {
-    if (guides === 'lying') buildGuides();
-  }),
+  azimuth: bindRange('laz', layerParams, 'azimuth', (v) => `${v}°`),
   centre: bindRange('lcentre', layerParams, 'centerElevation', (v) => `${v}°`),
   slice: bindRange('lslice', layerParams, 'sliceElevation', (v) => `${v}°`),
   amount: bindRange('lamount', layerParams, 'amount', (v) => (v === 0 ? 'none' : v.toFixed(2))),
@@ -1377,7 +1374,6 @@ $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
     morph = null;
     tweens.delete('octas');
     if (view === 'outside') setView('outside', { reset: true, instant: true });
-    buildGuides();
     recompute();
     syncMap();
     syncFreeze();

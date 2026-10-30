@@ -249,3 +249,7 @@ code { font-size: 12.5px; background: var(--chip); padding: 1px 4px; border-radi
 #etage [data-etage="low"]::before { background: rgb(208, 212, 218); }
 #etage [data-etage="mid"]::before { background: rgb(230, 233, 237); }
 #etage [data-etage="high"]::before { background: rgb(250, 251, 253); }
+
+/* azimuth and elevation side by side */
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; margin: 14px 0; }
+.pair > .field { margin: 0; min-width: 0; }
