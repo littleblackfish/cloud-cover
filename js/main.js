@@ -79,12 +79,12 @@ const noiseFor = (seed) => {
 // ================================================================ three.js scene
 
 const canvas = $('#view');
-// The cloud-layer scene spans 100 ft to 100 km, so depth needs a log buffer.
+// The scene spans the observer's 1.7 m to hundreds of km, so depth needs a log buffer.
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0f1622);
-const camera = new THREE.PerspectiveCamera(45, 1, 0.005, 1e5);
+const camera = new THREE.PerspectiveCamera(45, 1, 1e-4, 1e4);
 
 scene.add(new THREE.HemisphereLight(0xffffff, 0x556070, 1.1));
 const sun = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -299,13 +299,7 @@ const dome = new THREE.Mesh(
 dome.renderOrder = 2;
 scene.add(dome);
 
-const ground = new THREE.Mesh(
-  new THREE.CircleGeometry(8, 128),
-  new THREE.MeshBasicMaterial({ color: 0x33402f }),
-);
-ground.rotation.x = -Math.PI / 2;
-ground.position.y = -0.003;
-scene.add(ground);
+const groundMaterial = new THREE.MeshBasicMaterial({ color: 0x33402f });
 
 function circleLine(e, r, color, opacity) {
   const pts = [];
@@ -418,19 +412,19 @@ const observer = new THREE.Group();
 }
 scene.add(observer);
 
-// ---------------------------------------------------------------- cloud layer
+// ---------------------------------------------------------------- scale
 //
-// In cloud-layer mode the scene is to scale around the observer: the dome's
-// radius is 100 ft, so it sits between the observer and the lowest possible
-// cloud. The observer's eye is 1.7 m above the ground, so the ground ends at
-// their horizon, sqrt(2 R h) = 4.65 km away. Clouds are higher, so they are
-// drawn out to where the observer's line of sight, grazing that horizon, meets
-// them. Everything follows the Earth's curve.
+// The scene is to scale around the observer. Their eye, 1.7 m above the
+// ground, is the dome's centre, and the dome's radius is the distance to their
+// horizon, sqrt(2 R h) = 4.65 km: the dome stands on the horizon, and the
+// ground inside it is all the ground they can see. In the cloud layer, clouds
+// are drawn out to where the observer's line of sight, grazing that horizon,
+// still reaches them. Everything follows the Earth's curve.
 
-const SCENE_M = 100 * FT; // metres per scene unit: dome radius = 100 ft
-const K = 1 / SCENE_M;
 const EYE_M = 1.7;
 const REACH_M = Math.sqrt(2 * EARTH_R * EYE_M); // distance to the ground horizon
+const SCENE_M = REACH_M; // metres per scene unit: the dome's radius
+const K = 1 / SCENE_M;
 const REACH = REACH_M * K;
 const GROUND_Y = -EYE_M * K; // the scene's origin is the observer's eye
 // how far the Earth's surface has curved away below the observer's level, at
@@ -451,10 +445,33 @@ function curvedDisc(r, segments, rings = 48) {
   return g;
 }
 
-const groundLayer = new THREE.Mesh(curvedDisc(REACH, 160, 8), ground.material);
+const groundLayer = new THREE.Mesh(curvedDisc(REACH, 160, 8), groundMaterial);
 groundLayer.position.y = GROUND_Y;
-groundLayer.visible = false;
 scene.add(groundLayer);
+
+// The observer is far too small to see at this scale, so a marker of fixed
+// on-screen size shows where they stand.
+const observerMarker = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  g.fillStyle = '#ff9f43';
+  g.strokeStyle = '#1b1f27';
+  g.lineWidth = 6;
+  g.beginPath();
+  g.arc(32, 32, 22, 0, 2 * Math.PI);
+  g.fill();
+  g.stroke();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, sizeAttenuation: false, depthTest: false, transparent: true }));
+  s.scale.set(0.018, 0.018, 1);
+  s.position.y = GROUND_Y;
+  s.renderOrder = 6;
+  scene.add(s);
+  return s;
+})();
+const setObserverVisible = (v) => { observer.visible = v; observerMarker.visible = v; };
 
 // Étage limits in feet, as used for reporting, and the tint each étage's
 // clouds get. The tint follows the cloud base, so it blends as the layer
@@ -504,9 +521,10 @@ const layerSurface = new THREE.Mesh(
     fragmentShader: SURFACE_FRAG,
     side: THREE.DoubleSide,
     transparent: true,
-    depthWrite: false,
+    depthWrite: true, // so the dome is hidden where the layer lies in front of it
   }),
 );
+layerSurface.renderOrder = 1; // before the dome
 layerSurface.frustumCulled = false;
 layerSurface.visible = false;
 layerSurface.userData.radius = 0;
@@ -546,14 +564,10 @@ function updateCloudMeshes() {
   const on = mode === 'layer';
   domeUniforms.layerOn.value = on ? 1 : 0;
   if (!on) domeUniforms.cloudColor.value.set(CLOUD[0] / 255, CLOUD[1] / 255, CLOUD[2] / 255);
-  // to scale: 1.7 m tall, feet on the ground (the figure is 0.086 units tall)
-  // The observer's eye is the dome's centre: the figure stands one eye
-  // height (1.7 m, against the 100 ft dome) below it, as does the ground.
+  // The observer's eye is the dome's centre: the figure (to scale, its eye
+  // 0.078 units up) stands one eye height below it, as does the ground.
   observer.scale.setScalar((EYE_M * K) / 0.078);
   observer.position.y = GROUND_Y;
-  ground.position.y = GROUND_Y - 0.001;
-  ground.visible = !on;
-  groundLayer.visible = on;
   layerSurface.visible = false;
   if (!on) return;
   updatePattern();
@@ -587,11 +601,13 @@ let camFlying = false;
 // camera sits, its field of view, and its default heading.
 const OUTSIDE = {
   octas: { target: new THREE.Vector3(0, 0.25, 0), out: 3.19, up: 1.25, fov: 45, heading: Math.atan2(-2.1, 2.4) },
-  layer: { target: new THREE.Vector3(0, 2, 0), out: 11.0, up: 0.6, fov: 60, heading: Math.atan2(-7, 8.5) },
+  // low, under the cloud layer, looking up at it past the dome
+  layer: { target: new THREE.Vector3(0, 0.12, 0), out: 3.2, up: 0.05, fov: 55, heading: Math.atan2(-2.1, 2.4) },
 };
-// Outside the cloud layer the view is framed for a 4,000 ft base; higher
-// layers scale the whole framing up, so the clouds stay in view.
-const layerViewScale = () => Math.max(1, (layerParams.base * K) / 40);
+// Outside the cloud layer the view is framed for a base up to about 4,500 ft
+// (0.3 dome radii); higher layers scale the whole framing up, so the clouds
+// stay in view.
+const layerViewScale = () => Math.max(1, (layerParams.base * K) / 0.3);
 let viewScaleShown = 1;
 // heading: compass azimuth (radians) the camera faces
 function cameraHeading() {
@@ -601,7 +617,7 @@ function cameraHeading() {
 }
 function setOrbitLimits() {
   if (mode === 'layer') {
-    orbit.maxDistance = 20000; // far enough to see the whole layer, out to the line of sight
+    orbit.maxDistance = 150; // far enough to see the whole layer, out to the line of sight
     orbit.maxPolarAngle = Math.PI / 2 - 0.01; // stay above the ground
   } else {
     orbit.maxDistance = 7;
@@ -639,7 +655,7 @@ function setView(v, { yaw, reset = false, instant = false } = {}) {
   const heading = yaw ?? (from === 'inside' ? look.yaw : cameraHeading());
   if (v === 'outside') {
     setOrbitLimits();
-    observer.visible = true;
+    setObserverVisible(true);
     const o = OUTSIDE[mode === 'layer' ? 'layer' : 'octas'];
     const h = reset ? o.heading : heading;
     const sc = mode === 'layer' ? layerViewScale() : 1;
@@ -659,7 +675,7 @@ function setView(v, { yaw, reset = false, instant = false } = {}) {
     look.fov = 80;
     flyTo(new THREE.Vector3(0, 0, 0), dirFromAzEl(look.yaw, look.pitch), look.fov, ms, () => {
       const inside = view === 'inside';
-      observer.visible = !inside;
+      setObserverVisible(!inside);
     });
     $('#view-hint').textContent = 'Drag to look around · scroll to change field of view';
   }

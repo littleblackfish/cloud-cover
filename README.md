@@ -19,11 +19,12 @@ and is hosted on GitHub Pages without a build step.
 - **Cloud layer tab:** one flat cloud layer in the low, mid or high étage,
   either cumuliform (separate elements) or stratiform (a sheet with gaps).
   Coverage is picked in octas as seen on the dome; the clouds are sized to
-  give it. Each étage tints its clouds. The scene is to scale and follows the Earth's curve: an
-  observer with eyes 1.7 m up, a 100 ft dome, ground out to the 4.65 km
-  horizon, and the layer drawn out to the observer's line of sight. The GPU
-  draws the layer's projection on the dome directly, pixel by pixel, from
-  the same random layout used for the octa numbers.
+  give it. Each étage tints its clouds. The scene is to scale and follows
+  the Earth's curve: an observer with eyes 1.7 m up, a dome whose radius is
+  the distance to their horizon (4.65 km), the ground inside it, and the
+  layer drawn out to the observer's line of sight. The GPU draws the
+  layer's projection on the dome directly, pixel by pixel, from the same
+  random layout used for the octa numbers.
 - **Quiz tab:** random skies to estimate, scored using the octa rounding rules.
 - **Notes tab:** the geometry, explained for a beginner observer in Canada.
 
