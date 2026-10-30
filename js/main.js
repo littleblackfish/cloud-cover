@@ -239,10 +239,14 @@ const LAYER_GLSL = `
     float w = rw + 1.5 * amount * minor / feature;
     float c = 0.0;
     if (k < 0.999) {
+    #ifdef ONE_SAMPLE
+      c = smoothstep(layerT - w, layerT + w, r + amount * layerTex(g));
+    #else
       vec4 f = r + amount * vec4(layerTex(g - 0.375 * major), layerTex(g - 0.125 * major),
                                  layerTex(g + 0.125 * major), layerTex(g + 0.375 * major));
       vec4 s = smoothstep(vec4(layerT - w), vec4(layerT + w), f);
       c = 0.25 * (s.x + s.y + s.z + s.w);
+    #endif
     }
     float expected = smoothstep(layerT - amount, layerT + amount, r);
     return mix(c, expected, k) * layerFade;
@@ -549,6 +553,8 @@ const layerSurface = new THREE.Mesh(
     uniforms: { ...layerUniforms, metresPerUnit, color: { value: new THREE.Color(0xeef1f5) } },
     vertexShader: SURFACE_VERT,
     fragmentShader: SURFACE_FRAG,
+    // seen from outside, one sample per pixel is enough (the dome uses four)
+    defines: { ONE_SAMPLE: '' },
     side: THREE.DoubleSide,
     transparent: true,
     depthWrite: true, // so the dome is hidden where the layer lies in front of it
@@ -606,7 +612,9 @@ function updateCloudMeshes() {
     layerSurface.userData.radius = reach;
   }
   layerSurface.position.y = GROUND_Y + layerParams.base * K;
-  layerSurface.visible = true;
+  // From inside, the 3D layer lines up exactly with the clouds on the dome,
+  // so drawing it again there would only cost time.
+  layerSurface.visible = !settledInside;
 }
 
 // ================================================================ cameras
@@ -618,6 +626,9 @@ orbit.maxDistance = 7; // widened in cloud-layer mode
 orbit.maxPolarAngle = Math.PI / 2 + 0.35;
 
 const look = { yaw: 0, pitch: 25 * DEG, fov: 80, drag: null };
+
+// True once the camera has arrived inside the dome (not while flying in).
+let settledInside = false;
 
 // The camera flies between views. While it flies, neither the orbit
 // controls nor the inside look-around drive it.
@@ -683,6 +694,8 @@ function setView(v, { yaw, reset = false, instant = false } = {}) {
   if (v === 'outside') {
     setOrbitLimits();
     setObserverVisible(true);
+    settledInside = false;
+    dirty = true; // bring the 3D layer back for the way out
     const o = OUTSIDE[mode === 'layer' ? 'layer' : 'octas'];
     const h = reset ? o.heading : heading;
     const sc = mode === 'layer' ? layerViewScale() : 1;
@@ -703,6 +716,8 @@ function setView(v, { yaw, reset = false, instant = false } = {}) {
     flyTo(new THREE.Vector3(0, 0, 0), dirFromAzEl(look.yaw, look.pitch), look.fov, ms, () => {
       const inside = view === 'inside';
       setObserverVisible(!inside);
+      settledInside = inside;
+      dirty = true; // the 3D layer can go now
     });
     $('#view-hint').textContent = 'Drag to look around · scroll to change field of view';
   }
