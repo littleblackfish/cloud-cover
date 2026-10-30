@@ -16,19 +16,14 @@ and is hosted on GitHub Pages without a build step.
 - **All-sky map:** a flat map of the whole dome. In the equal-area
   projection, area on the map is proportional to octas. Switch to *fisheye*
   to see how a camera-style projection distorts it.
-- **Cloud layer tab:** one horizontal cloud layer in the low, mid or high
-  étage, either cumuliform (separate elements) or stratiform (a sheet with
-  gaps). Coverage is picked in octas, either as seen on the dome (the clouds
-  resize to keep it as the layer changes height) or as the real map-view
-  amount. The scene is to scale and follows the Earth's curve: an observer
-  with eyes 1.7 m up, a 100 ft dome, ground out to the 4.65 km horizon, and
-  clouds at their real heights out to the observer's line of sight (near
-  clouds as 3D elements, distant ones as surfaces drawn on the GPU from the
-  same random layout). The layer is ray-traced from the observer
-  with Earth curvature included. It compares the layer's real
-  map-view coverage with the coverage you would see on the dome, including the
-  packing effect near the horizon. Heights are in feet by default, with a
-  switch to metres.
+- **Cloud layer tab:** one flat cloud layer in the low, mid or high étage,
+  either cumuliform (separate elements) or stratiform (a sheet with gaps).
+  Coverage is picked in octas, either as seen on the dome or as the real
+  map-view amount. The scene is to scale and follows the Earth's curve: an
+  observer with eyes 1.7 m up, a 100 ft dome, ground out to the 4.65 km
+  horizon, and the layer drawn out to the observer's line of sight. The GPU
+  draws the layer's projection on the dome directly, pixel by pixel, from
+  the same random layout used for the octa numbers.
 - **Quiz tab:** random skies to estimate, scored using the octa rounding rules.
 - **Notes tab:** the geometry, explained for a beginner observer in Canada.
 

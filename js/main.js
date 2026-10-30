@@ -5,7 +5,7 @@ import {
   reportedOctas, makeNoise3, mulberry32, OCTA_BAND_ELEVATIONS, vertSliceFrame, vertSliceBoundaries,
 } from './sky.js';
 import {
-  castLayer, nearbyClouds, layerGeometry, sheetField, sheetGeometry, solvePlanCover, distanceToHeight, EARTH_R,
+  castLayer, layerGeometry, sheetField, sheetGeometry, solvePlanCover, distanceToHeight, EARTH_R,
 } from './layer.js';
 
 const DEG = Math.PI / 180;
@@ -24,7 +24,7 @@ const layerParams = {
   // octas: chosen amount; coverMode says whether it is the amount seen on the
   // dome or the map-view amount. cover: resulting map-view fraction.
   octas: 3, coverMode: 'dome', cover: 3 / 8,
-  base: 4000 * FT, thickness: 3000 * FT, size: 1500, extent: 400,
+  base: 4000 * FT, thickness: 0, size: 1500, extent: 400, // a flat layer
   curved: true, // Earth curvature: always on
   seed: 1, showClouds: true,
 };
@@ -94,6 +94,99 @@ function domeGeometry(segA = 192, segE = 64) {
   g.setIndex(idx);
   return g;
 }
+// ---------------------------------------------------------------- layer pattern
+//
+// The cloud layer's pattern is computed per pixel on the GPU, for the dome and
+// the 3D layer alike, from the same random layout the CPU uses for the octa
+// numbers (the hash and noise below copy layer.js and sky.js exactly).
+// Elements: inside a disc of radius r around each lattice point. Sheets:
+// where the noise field exceeds the threshold.
+const permTexture = new THREE.DataTexture(new Uint8Array(512), 512, 1, THREE.RedFormat, THREE.UnsignedByteType);
+let permSeed = null;
+const patternUniforms = {
+  sheet: { value: 0 },
+  seed: { value: 1 },
+  spacing: { value: 1000 },
+  radius: { value: 0 },
+  occupied: { value: 0.85 },
+  freq: { value: 1 / 1500 },
+  sheetT: { value: 0 },
+  coverMean: { value: 0 },
+  perm: { value: permTexture },
+};
+const PATTERN_GLSL = `
+  uniform int sheet, seed;
+  uniform float spacing, radius, occupied, freq, sheetT, coverMean;
+  uniform sampler2D perm;
+  // layer.js hash3
+  uvec3 hash3(int ix, int iy) {
+    uint h = (uint(ix) * 0x27d4eb2du) ^ (uint(iy) * 0x165667b1u) ^ (uint(seed) * 0x9e3779b1u);
+    h = (h ^ (h >> 15u)) * 0x85ebca6bu;
+    h = (h ^ (h >> 13u)) * 0xc2b2ae35u;
+    h ^= h >> 16u;
+    uint g = (h ^ 0x5bd1e995u) * 0x01000193u;
+    g ^= g >> 15u;
+    uint q = (g ^ 0x2545f491u) * 0x9e3779b1u;
+    q ^= q >> 13u;
+    return uvec3(h, g, q);
+  }
+  // distance from p to the nearest cloud element's edge (negative inside)
+  float elementEdge(vec2 p) {
+    int ix = int(floor(p.x / spacing)), iy = int(floor(p.y / spacing));
+    float best = 1e9;
+    for (int ox = -1; ox <= 1; ox++) for (int oy = -1; oy <= 1; oy++) {
+      uvec3 h = hash3(ix + ox, iy + oy);
+      if (float(h.x) / 4294967296.0 >= occupied) continue;
+      vec2 c = (vec2(float(ix + ox), float(iy + oy)) + vec2(h.yz) / 4294967296.0) * spacing;
+      best = min(best, length(c - p) - radius);
+    }
+    return best;
+  }
+
+  // sky.js makeNoise3
+  int P(int i) { return int(texelFetch(perm, ivec2(i, 0), 0).r * 255.0 + 0.5); }
+  float grad(int h, float x, float y, float z) {
+    h &= 15;
+    float u = h < 8 ? x : y;
+    float v = h < 4 ? y : (h == 12 || h == 14 ? x : z);
+    return ((h & 1) == 0 ? u : -u) + ((h & 2) == 0 ? v : -v);
+  }
+  float fade(float t) { return t * t * t * (t * (t * 6.0 - 15.0) + 10.0); }
+  float noise(vec3 p) {
+    int X = int(floor(p.x)) & 255, Y = int(floor(p.y)) & 255, Z = int(floor(p.z)) & 255;
+    vec3 f = p - floor(p);
+    float u = fade(f.x), v = fade(f.y), w = fade(f.z);
+    int A = P(X) + Y, AA = P(A) + Z, AB = P(A + 1) + Z;
+    int B = P(X + 1) + Y, BA = P(B) + Z, BB = P(B + 1) + Z;
+    float x = f.x, y = f.y, z = f.z;
+    return mix(
+      mix(mix(grad(P(AA), x, y, z), grad(P(BA), x - 1.0, y, z), u),
+          mix(grad(P(AB), x, y - 1.0, z), grad(P(BB), x - 1.0, y - 1.0, z), u), v),
+      mix(mix(grad(P(AA + 1), x, y, z - 1.0), grad(P(BA + 1), x - 1.0, y, z - 1.0), u),
+          mix(grad(P(AB + 1), x, y - 1.0, z - 1.0), grad(P(BB + 1), x - 1.0, y - 1.0, z - 1.0), u), v),
+      w);
+  }
+  float sheetNoise(vec2 p) {
+    vec2 q = p * freq;
+    return noise(vec3(q, 0.37)) + 0.45 * noise(vec3(q * 2.3 + vec2(17.0, 0.0), 1.7));
+  }
+
+  // Cloud amount (0..1) at ground point g, where w is the size of one screen
+  // pixel there in metres. Where pixels grow bigger than the clouds, the
+  // pattern can't be shown and fades to the layer's average cover instead.
+  float cloudAt(vec2 g, float w) {
+    float feature = sheet == 1 ? 0.5 / freq : max(2.0 * radius, 1.0);
+    float k = smoothstep(0.3, 1.0, w / feature);
+    float c = 0.0;
+    if (k < 0.999) {
+      c = sheet == 1
+        ? smoothstep(sheetT - 0.6 * w * freq, sheetT + 0.6 * w * freq, sheetNoise(g))
+        : 1.0 - smoothstep(-0.6 * w, 0.6 * w, elementEdge(g));
+    }
+    return mix(c, coverMean, k);
+  }
+`;
+
 // The dome is shaded from the cloudiness field itself (half-float texture,
 // linearly interpolated) so cloud outlines stay crisp however far you zoom.
 const fieldData = new Uint16Array(N);
@@ -102,6 +195,10 @@ fieldTexture.wrapS = THREE.RepeatWrapping;
 fieldTexture.magFilter = THREE.LinearFilter;
 fieldTexture.minFilter = THREE.LinearFilter;
 const domeUniforms = {
+  ...patternUniforms,
+  layerOn: { value: 0 },
+  layerHeight: { value: 1000 }, // cloud base above the eye, m
+  layerReach: { value: 4e5 }, // m
   field: { value: fieldTexture },
   threshold: { value: 0 },
   skyColor: { value: new THREE.Vector3(120 / 255, 170 / 255, 225 / 255) },
@@ -120,8 +217,10 @@ const dome = new THREE.Mesh(
       #include <common>
       #include <logdepthbuf_pars_vertex>
       varying vec2 vUv;
+      varying vec3 vDir;
       void main() {
         vUv = uv;
+        vDir = position;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         #include <logdepthbuf_vertex>
       }`,
@@ -129,13 +228,30 @@ const dome = new THREE.Mesh(
       uniform sampler2D field;
       uniform float threshold, skyAlpha, cloudAlpha;
       uniform vec3 skyColor, cloudColor;
+      uniform int layerOn;
+      uniform float layerHeight, layerReach;
       varying vec2 vUv;
+      varying vec3 vDir;
       #include <logdepthbuf_pars_fragment>
+      ${PATTERN_GLSL}
       void main() {
         #include <logdepthbuf_fragment>
-        float f = texture2D(field, vUv).r;
-        float w = max(fwidth(f), 1e-5);
-        float a = smoothstep(threshold - w, threshold + w, f);
+        float a;
+        if (layerOn == 1) {
+          // Follow this pixel's line of sight out to the (curved) cloud layer.
+          vec3 d = normalize(vDir);
+          vec2 hor = vec2(d.x, -d.z); // east, north
+          float hl = max(length(hor), 1e-6);
+          float t = max(d.y, 0.0) / hl;
+          float dist = 2.0 * layerHeight / (t + sqrt(t * t + 2.0 * layerHeight / 6371000.0));
+          vec2 g = hor / hl * dist;
+          float w = length(fwidth(g));
+          a = (d.y < 0.0 || dist > layerReach) ? 0.0 : cloudAt(g, w);
+        } else {
+          float f = texture2D(field, vUv).r;
+          float w = max(fwidth(f), 1e-5);
+          a = smoothstep(threshold - w, threshold + w, f);
+        }
         gl_FragColor = vec4(mix(skyColor, cloudColor, a), mix(skyAlpha, cloudAlpha, a));
       }`,
   }),
@@ -359,37 +475,8 @@ function updateEtageDecor() {
   for (const [key, label] of Object.entries(etageLabels)) label.userData.draw(key === layerParams.etage);
 }
 
-// Cumuliform elements, drawn as instanced cylinders.
-const MAX_CLOUDS = 12000;
-const cloudMesh = new THREE.InstancedMesh(
-  new THREE.CylinderGeometry(1, 1, 1, 16),
-  new THREE.MeshLambertMaterial({ color: 0xf2f4f7 }),
-  MAX_CLOUDS,
-);
-cloudMesh.count = 0;
-cloudMesh.frustumCulled = false;
-scene.add(cloudMesh);
-
-// Cloud surfaces out to the line of sight. Too many elements lie out there to
-// draw each one, so the layer's base and top are drawn as curved surfaces
-// whose pattern is computed per pixel on the GPU, from the same random
-// layout the ray caster uses (the hash and noise below copy layer.js and
-// sky.js exactly). Elements: inside a disc of radius r around each lattice
-// point. Sheets: where the noise field exceeds the threshold T. Nearby
-// elements are drawn as real cylinders, and the surfaces start beyond them.
-const permTexture = new THREE.DataTexture(new Uint8Array(512), 512, 1, THREE.RedFormat, THREE.UnsignedByteType);
-let permSeed = null;
-const surfaceUniforms = {
-  sheet: { value: 0 },
-  seed: { value: 1 },
-  spacing: { value: 1000 },
-  radius: { value: 0 },
-  occupied: { value: 0.85 },
-  freq: { value: 1 / 1500 },
-  threshold: { value: 0 },
-  perm: { value: permTexture },
-  metresPerUnit: { value: SCENE_M },
-};
+// The layer in 3D: one curved surface out to the observer's line of sight.
+const metresPerUnit = { value: SCENE_M };
 const SURFACE_VERT = `
   #include <common>
   #include <logdepthbuf_pars_vertex>
@@ -402,111 +489,38 @@ const SURFACE_VERT = `
   }`;
 const SURFACE_FRAG = `
   #include <logdepthbuf_pars_fragment>
-  uniform int sheet, seed;
-  uniform float spacing, radius, occupied, freq, threshold, innerRadius;
-  uniform sampler2D perm;
   uniform vec3 color;
   varying vec2 vGround;
-
-  // layer.js hash3
-  uvec3 hash3(int ix, int iy) {
-    uint h = (uint(ix) * 0x27d4eb2du) ^ (uint(iy) * 0x165667b1u) ^ (uint(seed) * 0x9e3779b1u);
-    h = (h ^ (h >> 15u)) * 0x85ebca6bu;
-    h = (h ^ (h >> 13u)) * 0xc2b2ae35u;
-    h ^= h >> 16u;
-    uint g = (h ^ 0x5bd1e995u) * 0x01000193u;
-    g ^= g >> 15u;
-    uint q = (g ^ 0x2545f491u) * 0x9e3779b1u;
-    q ^= q >> 13u;
-    return uvec3(h, g, q);
-  }
-  bool element(vec2 p) {
-    int ix = int(floor(p.x / spacing)), iy = int(floor(p.y / spacing));
-    for (int ox = -1; ox <= 1; ox++) for (int oy = -1; oy <= 1; oy++) {
-      uvec3 h = hash3(ix + ox, iy + oy);
-      if (float(h.x) / 4294967296.0 >= occupied) continue;
-      vec2 c = (vec2(float(ix + ox), float(iy + oy)) + vec2(h.yz) / 4294967296.0) * spacing;
-      vec2 d = c - p;
-      if (dot(d, d) <= radius * radius) return true;
-    }
-    return false;
-  }
-
-  // sky.js makeNoise3
-  int P(int i) { return int(texelFetch(perm, ivec2(i, 0), 0).r * 255.0 + 0.5); }
-  float grad(int h, float x, float y, float z) {
-    h &= 15;
-    float u = h < 8 ? x : y;
-    float v = h < 4 ? y : (h == 12 || h == 14 ? x : z);
-    return ((h & 1) == 0 ? u : -u) + ((h & 2) == 0 ? v : -v);
-  }
-  float fade(float t) { return t * t * t * (t * (t * 6.0 - 15.0) + 10.0); }
-  float noise(vec3 p) {
-    int X = int(floor(p.x)) & 255, Y = int(floor(p.y)) & 255, Z = int(floor(p.z)) & 255;
-    vec3 f = p - floor(p);
-    float u = fade(f.x), v = fade(f.y), w = fade(f.z);
-    int A = P(X) + Y, AA = P(A) + Z, AB = P(A + 1) + Z;
-    int B = P(X + 1) + Y, BA = P(B) + Z, BB = P(B + 1) + Z;
-    float x = f.x, y = f.y, z = f.z;
-    return mix(
-      mix(mix(grad(P(AA), x, y, z), grad(P(BA), x - 1.0, y, z), u),
-          mix(grad(P(AB), x, y - 1.0, z), grad(P(BB), x - 1.0, y - 1.0, z), u), v),
-      mix(mix(grad(P(AA + 1), x, y, z - 1.0), grad(P(BA + 1), x - 1.0, y, z - 1.0), u),
-          mix(grad(P(AB + 1), x, y - 1.0, z - 1.0), grad(P(BB + 1), x - 1.0, y - 1.0, z - 1.0), u), v),
-      w);
-  }
-  float field(vec2 p) {
-    vec2 q = p * freq;
-    return noise(vec3(q, 0.37)) + 0.45 * noise(vec3(q * 2.3 + vec2(17.0, 0.0), 1.7));
-  }
-
+  ${PATTERN_GLSL}
   void main() {
     #include <logdepthbuf_fragment>
-    if (length(vGround) < innerRadius) discard;
-    bool cloudy = sheet == 1 ? field(vGround) > threshold : element(vGround);
-    if (!cloudy) discard;
-    gl_FragColor = vec4(color, 1.0);
+    float a = cloudAt(vGround, length(fwidth(vGround)));
+    if (a < 0.01) discard;
+    gl_FragColor = vec4(color, 0.95 * a);
   }`;
+const layerSurface = new THREE.Mesh(
+  new THREE.BufferGeometry(),
+  new THREE.ShaderMaterial({
+    uniforms: { ...patternUniforms, metresPerUnit, color: { value: new THREE.Color(0xeef1f5) } },
+    vertexShader: SURFACE_VERT,
+    fragmentShader: SURFACE_FRAG,
+    side: THREE.DoubleSide,
+    transparent: true,
+    depthWrite: false,
+  }),
+);
+layerSurface.frustumCulled = false;
+layerSurface.visible = false;
+layerSurface.userData.radius = 0;
+scene.add(layerSurface);
 
-// [base, top] surfaces
-const surfaces = [0xcfd5dd, 0xf4f6f9].map((hex) => {
-  const m = new THREE.Mesh(
-    new THREE.BufferGeometry(),
-    new THREE.ShaderMaterial({
-      uniforms: {
-        ...surfaceUniforms,
-        color: { value: new THREE.Color(hex) },
-        innerRadius: { value: 0 },
-      },
-      vertexShader: SURFACE_VERT,
-      fragmentShader: SURFACE_FRAG,
-      side: THREE.DoubleSide,
-    }),
-  );
-  m.frustumCulled = false;
-  m.visible = false;
-  m.userData.radius = 0;
-  scene.add(m);
-  return m;
-});
-
-function setSurface(m, height, reach, inner) {
-  // rebuild the curved disc only when its size changes noticeably
-  if (Math.abs(m.userData.radius - reach) > reach * 0.01) {
-    m.geometry.dispose();
-    m.geometry = curvedDisc(reach * K, 192, 64);
-    m.userData.radius = reach;
-  }
-  m.position.y = GROUND_Y + height * K;
-  m.material.uniforms.innerRadius.value = inner;
-  m.visible = true;
-}
-
-function updateSurfaces(inner) {
+// Point the shared pattern uniforms at the current layer.
+function updatePattern() {
   const p = layerParams;
   const sheet = p.form === 'stratiform';
-  surfaceUniforms.sheet.value = sheet ? 1 : 0;
-  surfaceUniforms.seed.value = p.seed;
+  patternUniforms.sheet.value = sheet ? 1 : 0;
+  patternUniforms.seed.value = p.seed;
+  patternUniforms.coverMean.value = p.cover;
   if (sheet) {
     const { perm } = sheetField(p);
     if (permSeed !== p.seed) {
@@ -515,49 +529,41 @@ function updateSurfaces(inner) {
       permSeed = p.seed;
     }
     const { T } = sheetGeometry(p);
-    surfaceUniforms.freq.value = 1 / p.size;
-    surfaceUniforms.threshold.value = T === -Infinity ? -1e9 : T;
+    patternUniforms.freq.value = 1 / p.size;
+    patternUniforms.sheetT.value = T === -Infinity ? -1e9 : T;
   } else {
     const geo = layerGeometry(p);
-    surfaceUniforms.spacing.value = geo.s;
-    surfaceUniforms.radius.value = geo.r;
-    surfaceUniforms.occupied.value = geo.p;
+    patternUniforms.spacing.value = geo.s;
+    patternUniforms.radius.value = geo.r;
+    patternUniforms.occupied.value = geo.p;
   }
-  const limit = p.extent * 1000;
-  setSurface(surfaces[0], p.base, Math.min(limit, sightRange(p.base)), inner);
-  if (p.thickness >= 20) setSurface(surfaces[1], p.base + p.thickness, Math.min(limit, sightRange(p.base + p.thickness)), inner);
+  domeUniforms.layerHeight.value = Math.max(1, p.base - EYE_M);
+  domeUniforms.layerReach.value = p.extent * 1000;
 }
 
 function updateCloudMeshes() {
   const on = mode === 'layer';
   layerDecor.visible = on;
+  domeUniforms.layerOn.value = on ? 1 : 0;
   // to scale: 1.7 m tall, feet on the ground (the figure is 0.086 units tall)
   observer.scale.setScalar(on ? (EYE_M * K) / 0.086 : 1);
   observer.position.y = on ? GROUND_Y : 0;
   ground.visible = !on;
   groundLayer.visible = on;
-  cloudMesh.count = 0;
-  surfaces.forEach((m) => { m.visible = false; });
+  layerSurface.visible = false;
   if (!on) return;
   updateEtageDecor();
+  updatePattern();
   if (!layerParams.showClouds || layerParams.cover <= 0) return;
-  if (layerParams.form === 'stratiform') {
-    updateSurfaces(0);
-    return;
+  const reach = Math.min(layerParams.extent * 1000, sightRange(layerParams.base));
+  // rebuild the curved disc only when its size changes noticeably
+  if (Math.abs(layerSurface.userData.radius - reach) > reach * 0.01) {
+    layerSurface.geometry.dispose();
+    layerSurface.geometry = curvedDisc(reach * K, 192, 64);
+    layerSurface.userData.radius = reach;
   }
-  const reach = Math.min(layerParams.extent * 1000, sightRange(layerParams.base + layerParams.thickness));
-  const list = nearbyClouds(layerParams, K, reach, MAX_CLOUDS);
-  const m = new THREE.Matrix4();
-  list.forEach((c, i) => {
-    const h = c.top - c.base;
-    m.makeScale(c.r, h, c.r);
-    m.setPosition(c.x, GROUND_Y + c.base + h / 2 - drop(c.d), -c.y);
-    cloudMesh.setMatrixAt(i, m);
-  });
-  cloudMesh.count = list.length;
-  cloudMesh.instanceMatrix.needsUpdate = true;
-  // beyond the farthest cylinder, the base and top surfaces take over
-  if (list.length === MAX_CLOUDS) updateSurfaces(list[list.length - 1].d);
+  layerSurface.position.y = GROUND_Y + layerParams.base * K;
+  layerSurface.visible = true;
 }
 
 // ================================================================ cameras
@@ -834,7 +840,8 @@ const rayParams = (quick) => ({ ...layerParams, base: layerParams.base - EYE_M, 
 
 function recompute() {
   if (mode === 'layer') {
-    const quick = !!baseTween;
+    // the GPU draws the dome; this cast only feeds the numbers and the sky map
+    const quick = true;
     layerParams.cover = layerParams.coverMode === 'dome'
       ? solvePlanCover(rayParams(quick), layerParams.octas / 8, layerParams.cover)
       : layerParams.octas / 8;
@@ -880,7 +887,6 @@ function frame(now) {
       baseTween = null;
     }
     layerCtl.base.sync();
-    layerCtl.thickness.sync();
     layerCtl.size.set(layerParams.size);
     dirty = true;
   }
@@ -980,7 +986,7 @@ $$('#guides button').forEach((b) => b.addEventListener('click', () => setGuides(
 
 // ---------------------------------------------------------------- layer tab
 
-// Heights (cloud base, thickness) are shown in feet or metres; everything is
+// Cloud base height is shown in feet or metres; everything is
 // stored in metres. Horizontal distances stay metric.
 let heightUnit = 'ft';
 const THICKNESS_FT = { cumuliform: [100, 35000], stratiform: [50, 10000] };
@@ -1018,7 +1024,6 @@ function bindHeight(id, key) {
 
 const layerCtl = {
   base: bindHeight('lbase', 'base'),
-  thickness: bindHeight('lthick', 'thickness'),
   size: bindRange('lsize', layerParams, 'size', fmtKm),
   extent: bindRange('lext', layerParams, 'extent', (v) => `${v} km`),
 };
@@ -1055,29 +1060,28 @@ $$('#units button').forEach((b) => b.addEventListener('click', () => {
   heightUnit = b.dataset.units;
   $$('#units button').forEach((x) => x.classList.toggle('on', x === b));
   layerCtl.base.sync();
-  layerCtl.thickness.sync();
 }));
 $('#lshow').addEventListener('change', (e) => { layerParams.showClouds = e.target.checked; dirty = true; });
 $('#lreseed').addEventListener('click', () => { layerParams.seed = 1 + Math.floor(Math.random() * 1e6); dirty = true; });
 
-// Typical layer for each étage and form (heights in ft, size in m).
+// Typical layer for each étage and form (base in ft, size in m).
 const LAYER_DEFAULTS = {
   low: {
-    cumuliform: { base: 4000, thickness: 3000, size: 1500 },
-    stratiform: { base: 1500, thickness: 800, size: 1500 },
+    cumuliform: { base: 4000, size: 1500 },
+    stratiform: { base: 1500, size: 1500 },
   },
   mid: {
-    cumuliform: { base: 12000, thickness: 600, size: 800 },
-    stratiform: { base: 10000, thickness: 4000, size: 8000 },
+    cumuliform: { base: 12000, size: 800 },
+    stratiform: { base: 10000, size: 8000 },
   },
   high: {
-    cumuliform: { base: 25000, thickness: 200, size: 400 },
-    stratiform: { base: 28000, thickness: 1500, size: 10000 },
+    cumuliform: { base: 25000, size: 400 },
+    stratiform: { base: 28000, size: 10000 },
   },
 };
 const GENUS = {
   low: {
-    cumuliform: 'Cumulus (Cu). Make it thick for towering cumulus (TCU) or cumulonimbus (Cb): bases are low even when tops reach the high étage.',
+    cumuliform: 'Cumulus (Cu). Towering cumulus (TCU) and cumulonimbus (Cb) have low bases too, even when their tops reach the high étage.',
     stratiform: 'Stratus (St) or a stratocumulus (Sc) sheet. Nimbostratus (Ns) bases are often low too.',
   },
   mid: {
@@ -1091,7 +1095,7 @@ const GENUS = {
 };
 
 // Étage or form changed. Coverage is kept; a new étage moves the same layer
-// smoothly to a typical base there, and a new form loads typical thickness
+// smoothly to a typical base there, and a new form loads typical
 // and element size.
 function syncLayerForm() {
   const { etage, form } = layerParams;
@@ -1107,7 +1111,6 @@ function syncLayerForm() {
 }
 function applyFormDefaults() {
   const d = LAYER_DEFAULTS[layerParams.etage][layerParams.form];
-  layerCtl.thickness.set(d.thickness * FT);
   layerCtl.size.set(d.size);
   syncLayerForm();
 }
@@ -1115,12 +1118,11 @@ $$('#etage button').forEach((b) => b.addEventListener('click', () => {
   if (b.dataset.etage === layerParams.etage) return;
   layerParams.etage = b.dataset.etage;
   // Map view: the same layer just moves. Seen on the dome: it also takes the
-  // new étage's typical thickness and spacing, and the solver keeps the octas.
+  // new étage's typical spacing, and the solver keeps the octas.
   const d = LAYER_DEFAULTS[layerParams.etage][layerParams.form];
   const to = { base: d.base * FT };
   let sizeAtEnd = null;
   if (layerParams.coverMode === 'dome') {
-    to.thickness = d.thickness * FT;
     if (layerParams.form === 'cumuliform') to.size = d.size;
     else sizeAtEnd = d.size;
   }

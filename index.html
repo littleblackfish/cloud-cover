@@ -175,10 +175,6 @@
           <input type="range" id="lbase" min="300" max="6500" step="100" value="4000">
         </label>
         <label class="field">
-          <span>Cloud thickness (base to top) <output id="lthick-out"></output></span>
-          <input type="range" id="lthick" min="100" max="35000" step="100" value="3000">
-        </label>
-        <label class="field">
           <span><span id="lsize-label">Cloud spacing</span> <output id="lsize-out"></output></span>
           <input type="range" id="lsize" min="100" max="5000" step="10" value="1500">
         </label>
@@ -187,7 +183,7 @@
           <input type="range" id="lext" min="2" max="400" step="1" value="400">
         </label>
         <div class="row">
-          <label class="check"><input type="checkbox" id="lshow" checked> Draw nearby clouds</label>
+          <label class="check"><input type="checkbox" id="lshow" checked> Show the layer in 3D</label>
           <button id="lreseed">Reshuffle</button>
         </div>
 
@@ -300,9 +296,9 @@
           horizon shows you its <em>side</em>. With cumulus that have real
           depth, the sides of distant clouds fill the gaps between them. A
           layer with 3/8 real coverage can look solid low down.
-          The <em>Cloud layer</em> tab shows this. Make the cloud thickness
-          small to remove the effect, or large (towering cumulus) to make it
-          strong. High clouds are thin, so they show it least.
+          The <em>Cloud layer</em> tab currently treats clouds as flat, so it
+          shows a layer crowding together toward the horizon but not this
+          filling-in of the gaps, which needs cloud depth.
         </p>
         <p>
           Distance also matters. A ray at elevation <var>e</var> meets a

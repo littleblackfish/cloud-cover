@@ -112,9 +112,42 @@ export function cloudAt(ix, iy, geo) {
 function castGrid(params, w, h, ss, cover) {
   if (cover) cover.fill(0);
   if (params.cover <= 0) return { geo: { planCover: 0 }, frac: 0 };
+  if (params.thickness <= 0) return castFlat(params, w, h, ss, cover);
   return params.form === 'stratiform'
     ? castSheet(params, w, h, ss, cover)
     : castElements(params, w, h, ss, cover);
+}
+
+// A flat layer (no thickness): each ray meets it at exactly one point.
+function castFlat(params, w, h, SS, cover) {
+  const { base, extent, curved } = params;
+  const sheet = params.form === 'stratiform';
+  const geo = sheet ? sheetGeometry(params) : layerGeometry(params);
+  const cloudy = sheet
+    ? (x, y) => geo.field(x, y) > geo.T
+    : (x, y) => coveredAt(x, y, geo);
+  const maxD = extent * 1000;
+  const wts = rowWeights(h);
+  let frac = 0;
+  for (let j = 0; j < h; j++) {
+    let row = 0;
+    for (let sj = 0; sj < SS; sj++) {
+      const e = ((j + (sj + 0.5) / SS) / h) * (Math.PI / 2);
+      const d = distanceToHeight(e, base, curved);
+      if (!(d < maxD)) continue;
+      for (let i = 0; i < w; i++) {
+        for (let si = 0; si < SS; si++) {
+          const a = ((i + (si + 0.5) / SS) / w) * 2 * Math.PI;
+          if (cloudy(d * Math.sin(a), d * Math.cos(a))) {
+            row++;
+            if (cover) cover[j * w + i] += 1 / (SS * SS);
+          }
+        }
+      }
+    }
+    frac += (row / (w * SS * SS)) * wts[j];
+  }
+  return { geo, frac };
 }
 
 // The full-resolution sky grid. `params.quick` casts one ray per cell instead
