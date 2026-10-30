@@ -1,5 +1,11 @@
 // A horizontal cloud layer seen from one point on the ground.
 //
+// Two kinds of layer are modelled. A cumuliform layer is made of separate
+// cloud elements (below). A stratiform layer is a continuous sheet with
+// holes: a smooth random field over the plane, cloudy where it exceeds a
+// threshold chosen to give the requested map-view cover. Its holes have
+// vertical walls, so a thick sheet hides more sky near the horizon too.
+//
 // Clouds are vertical cylinders (flat base, flat top, given thickness) placed
 // on an endless square lattice: each cell holds at most one cloud, centred at
 // a random spot inside the cell (it may overhang into neighbours). Because the lattice is generated from a hash of the
@@ -11,7 +17,7 @@
 // distance d, which is why even a ray aimed exactly at the horizon eventually
 // reaches the layer (about sqrt(2Rh) away).
 
-import { grid, W, H, N } from './sky.js';
+import { grid, W, H, N, makeNoise3 } from './sky.js';
 
 const EARTH_R = 6371000;
 
@@ -37,7 +43,7 @@ function hash3(ix, iy, seed) {
 const P_OCC = 0.85;
 const geoCache = new Map();
 
-export function layerGeometry({ cover, diameter, seed }) {
+export function layerGeometry({ cover, size: diameter, seed }) {
   const key = `${cover}|${diameter}|${seed}`;
   if (geoCache.has(key)) return geoCache.get(key);
   const r = diameter / 2;
@@ -96,6 +102,10 @@ export function cloudAt(ix, iy, geo) {
 }
 
 export function castLayer(params, cover) {
+  return params.form === 'stratiform' ? castSheet(params, cover) : castElements(params, cover);
+}
+
+function castElements(params, cover) {
   const { base, thickness, extent, curved } = params;
   const geo = layerGeometry(params);
   const { r, s } = geo;
@@ -165,16 +175,82 @@ export function castLayer(params, cover) {
   return geo;
 }
 
-// Clouds close enough to draw inside a unit dome where the cloud base sits at
-// height `sceneBase`. Returns positions/sizes in scene units.
-export function nearbyClouds(params, sceneBase, limit = 4000) {
+// ---------------------------------------------------------------- sheets
+
+const sheetCache = new Map();
+
+// Smooth random field over the ground plane (metres), with features about
+// `size` across, and the threshold that leaves the requested cover.
+export function sheetGeometry({ cover, size, seed }) {
+  const key = `${cover}|${size}|${seed}`;
+  if (sheetCache.has(key)) return sheetCache.get(key);
+  const noise = makeNoise3(seed);
+  const f = 1 / size;
+  const field = (x, y) => noise(x * f, y * f, 0.37) + 0.45 * noise(x * f * 2.3 + 17, y * f * 2.3, 1.7);
+  let T;
+  if (cover >= 0.999) T = -Infinity;
+  else {
+    const n = 220, span = 60 * size, vals = new Float32Array(n * n);
+    for (let a = 0; a < n; a++) {
+      for (let b = 0; b < n; b++) vals[a * n + b] = field((a / n - 0.5) * span, (b / n - 0.5) * span);
+    }
+    vals.sort();
+    T = vals[Math.min(vals.length - 1, Math.floor((1 - cover) * vals.length))];
+  }
+  const geo = { field, T, planCover: Math.min(cover, 1) };
+  if (sheetCache.size > 50) sheetCache.clear();
+  sheetCache.set(key, geo);
+  return geo;
+}
+
+function castSheet(params, cover) {
+  const { base, thickness, extent, curved } = params;
+  const geo = sheetGeometry(params);
+  const { field, T } = geo;
+  const top = base + thickness;
+  const maxD = extent * 1000;
+  const step = params.size / 3;
+  const SS = 2;
+  cover.fill(0);
+  for (let j = 0; j < H; j++) {
+    for (let sj = 0; sj < SS; sj++) {
+      const e = ((j + (sj + 0.5) / SS) / H) * (Math.PI / 2);
+      const ds = distanceToHeight(e, base, curved);
+      if (!(ds < maxD)) continue;
+      const de = Math.min(distanceToHeight(e, top, curved), maxD);
+      // sample the ray's path through the sheet: a hole shows sky only if it
+      // is open all the way through
+      const n = Math.min(6, 1 + Math.ceil((de - ds) / step));
+      for (let i = 0; i < W; i++) {
+        for (let si = 0; si < SS; si++) {
+          const a = ((i + (si + 0.5) / SS) / W) * 2 * Math.PI;
+          const dx = Math.sin(a), dy = Math.cos(a);
+          for (let q = 0; q < n; q++) {
+            const d = n === 1 ? ds : ds + ((de - ds) * q) / (n - 1);
+            if (field(d * dx, d * dy) > T) {
+              cover[j * W + i] += 1 / (SS * SS);
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+  return geo;
+}
+
+// ---------------------------------------------------------------- drawing
+
+// Cloud elements close enough to draw inside a unit dome, nearest first.
+// `k` is scene units per metre.
+export function nearbyClouds(params, k, limit) {
   const geo = layerGeometry(params);
-  const k = sceneBase / params.base; // scene units per metre
+  const base = params.base * k;
   const top = (params.base + params.thickness) * k;
   const rr = geo.r * k;
+  const reach = Math.sqrt(Math.max(0, 1 - base * base)) / k; // metres
+  const n = Math.min(400, Math.ceil(reach / geo.s) + 1);
   const out = [];
-  const reach = Math.sqrt(Math.max(0, 1 - sceneBase * sceneBase)) / k; // metres
-  const n = Math.ceil(reach / geo.s) + 1;
   for (let ix = -n; ix <= n; ix++) {
     for (let iy = -n; iy <= n; iy++) {
       const c = cloudAt(ix, iy, geo);
@@ -182,11 +258,11 @@ export function nearbyClouds(params, sceneBase, limit = 4000) {
       const cx = c.x * k, cy = c.y * k;
       const far = Math.hypot(cx, cy) + rr;
       if (far * far + top * top > 0.995) continue;
-      out.push({ x: cx, y: cy, r: rr, base: sceneBase, top });
-      if (out.length >= limit) return out;
+      out.push({ x: cx, y: cy, r: rr, base, top, d: far });
     }
   }
-  return out;
+  out.sort((p, q) => p.d - q.d);
+  return out.slice(0, limit);
 }
 
 export { EARTH_R, N };

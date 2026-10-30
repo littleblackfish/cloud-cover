@@ -15,8 +15,10 @@ and is hosted on GitHub Pages without a build step.
 - **All-sky map:** a flat map of the whole dome. In the equal-area
   projection, area on the map is proportional to octas. Switch to *fisheye*
   to see how a camera-style projection distorts it.
-- **Cloud layer tab:** a horizontal layer of cloud cylinders, ray-traced from
-  the observer with Earth curvature included. It compares the layer's real
+- **Cloud layer tab:** one horizontal cloud layer in the low, mid or high
+  étage, either cumuliform (separate elements) or stratiform (a sheet with
+  gaps). The scene is drawn to scale and the layer is ray-traced from the
+  observer with Earth curvature included. It compares the layer's real
   map-view coverage with the coverage you would see on the dome, including the
   packing effect near the horizon. Heights are in feet by default, with a
   switch to metres.

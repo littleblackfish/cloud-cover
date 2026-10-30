@@ -118,15 +118,29 @@
       <!-- ===================================================== LAYER -->
       <section class="tab" id="tab-layer" hidden>
         <p class="help">
-          A layer of identical cloud elements, parallel to the ground, viewed
-          from the observer at the centre. Compare the layer's real
-          (map-view) coverage with what it covers on the dome.
+          One cloud layer, parallel to the ground, seen by the observer at the
+          centre. The scene is drawn to scale: the dome's radius stands for
+          about 46,000 ft, so you can see the three étages (heights). The
+          observer marker is not to scale. Compare the layer's real map-view
+          coverage with how much of the dome it covers.
         </p>
-        <div class="seg" id="layer-presets">
-          <button data-preset="cu">Fair-weather cumulus</button>
-          <button data-preset="tcu">Towering cumulus</button>
-          <button data-preset="flat">Thin flat patches</button>
-        </div>
+
+        <fieldset class="field">
+          <legend>Étage</legend>
+          <div class="seg" id="etage">
+            <button data-etage="low" class="on">Low <small>to 6,500 ft</small></button>
+            <button data-etage="mid">Mid <small>6,600–19,000 ft</small></button>
+            <button data-etage="high">High <small>20,000 ft +</small></button>
+          </div>
+        </fieldset>
+        <fieldset class="field">
+          <legend>Form</legend>
+          <div class="seg" id="form">
+            <button data-form="cumuliform" class="on">Cumuliform</button>
+            <button data-form="stratiform">Stratiform</button>
+          </div>
+          <p class="help" id="genus"></p>
+        </fieldset>
 
         <label class="field">
           <span>Real coverage, map view <output id="lcover-out"></output></span>
@@ -141,19 +155,19 @@
         </div>
         <label class="field">
           <span>Cloud base height <output id="lbase-out"></output></span>
-          <input type="range" id="lbase" min="1000" max="20000" step="100" value="4000">
+          <input type="range" id="lbase" min="300" max="6500" step="100" value="4000">
         </label>
         <label class="field">
           <span>Cloud thickness (base to top) <output id="lthick-out"></output></span>
-          <input type="range" id="lthick" min="50" max="16000" step="50" value="2500">
+          <input type="range" id="lthick" min="100" max="35000" step="100" value="3000">
         </label>
         <label class="field">
-          <span>Cloud diameter <output id="ldiam-out"></output></span>
-          <input type="range" id="ldiam" min="200" max="4000" step="50" value="900">
+          <span><span id="lsize-label">Cloud diameter</span> <output id="lsize-out"></output></span>
+          <input type="range" id="lsize" min="50" max="4000" step="10" value="900">
         </label>
         <label class="field">
           <span>Layer extends out to <output id="lext-out"></output></span>
-          <input type="range" id="lext" min="2" max="250" step="1" value="250">
+          <input type="range" id="lext" min="2" max="400" step="1" value="400">
         </label>
         <div class="row">
           <label class="check"><input type="checkbox" id="lcurve" checked> Earth curvature</label>
@@ -270,9 +284,9 @@
           horizon shows you its <em>side</em>. With cumulus that have real
           depth, the sides of distant clouds fill the gaps between them. A
           layer with 3/8 real coverage can look solid low down.
-          The <em>Cloud layer</em> tab shows this. Use
-          <em>Thin flat patches</em> to remove the effect and
-          <em>Towering cumulus</em> to make it strong.
+          The <em>Cloud layer</em> tab shows this. Make the cloud thickness
+          small to remove the effect, or large (towering cumulus) to make it
+          strong. High clouds are thin, so they show it least.
         </p>
         <p>
           Distance also matters. A ray at elevation <var>e</var> meets a
