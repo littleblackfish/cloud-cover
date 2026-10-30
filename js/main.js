@@ -18,7 +18,7 @@ const $$ = (s) => [...document.querySelectorAll(s)];
 // negative = cumuli, positive = strati, 0 = a plain shape; its size is the
 // strength. modifier and amount are derived from it (see setForm).
 const shapeParams = {
-  octas: 3, shape: 'lying', azimuth: 90, elevation: 25,
+  octas: 1, shape: 'lying', azimuth: 270, elevation: 25,
   form: 0.3, modifier: 'strati', amount: 0.3, time: 0, seed: 1, animate: true,
 };
 function setForm(p, v) {
@@ -29,8 +29,8 @@ function setForm(p, v) {
 // The cloud layer is kept to plain geometry: one flat round patch on a flat
 // layer, no texture.
 const layerParams = {
-  etage: 'low', shape: 'cap', azimuth: 90, elevation: 25, // round patch only
-  form: 0, modifier: 'none', amount: 0, octas: 3,
+  etage: 'low', shape: 'cap', azimuth: 270, elevation: 25, // round patch only
+  form: 0, modifier: 'none', amount: 0, octas: 1,
   base: 4000 * FT, size: 1000, seed: 1,
 };
 let quizParams = null;
