@@ -4,7 +4,9 @@ import {
   W, H, N, grid, computeField, solveThreshold, coverFromField, bandFractions,
   reportedOctas, makeNoise3, mulberry32, OCTA_BAND_ELEVATIONS, vertSliceFrame, vertSliceBoundaries,
 } from './sky.js';
-import { castLayer, nearbyClouds, sheetField, sheetGeometry, solvePlanCover, distanceToHeight } from './layer.js';
+import {
+  castLayer, nearbyClouds, sheetField, sheetGeometry, solvePlanCover, distanceToHeight, EARTH_R,
+} from './layer.js';
 
 const DEG = Math.PI / 180;
 const FT = 0.3048; // metres per foot
@@ -23,7 +25,8 @@ const layerParams = {
   // dome or the map-view amount. cover: resulting map-view fraction.
   octas: 3, coverMode: 'dome', cover: 3 / 8,
   base: 4000 * FT, thickness: 3000 * FT, size: 1500, extent: 400,
-  curved: true, seed: 1, showClouds: true,
+  curved: true, // Earth curvature: always on
+  seed: 1, showClouds: true,
 };
 let quizParams = null;
 const quiz = { answered: false, right: 0, total: 0, streak: 0 };
@@ -245,13 +248,36 @@ scene.add(observer);
 //
 // In cloud-layer mode the scene is to scale around the observer: the dome's
 // radius is 100 ft, so it sits between the observer (about 6 ft tall) and
-// the lowest possible cloud. Clouds are drawn out to REACH_M; the projection
+// the lowest possible cloud. The observer's eye is 1.7 m above the ground and
+// the scene is drawn only out to their horizon, sqrt(2 R h) = 4.65 km away,
+// with the ground and the clouds following the Earth's curve. The projection
 // on the dome includes the whole layer, out to the horizon.
 
 const SCENE_M = 100 * FT; // metres per scene unit: dome radius = 100 ft
 const K = 1 / SCENE_M;
-const REACH_M = 25000;
+const EYE_M = 1.7;
+const REACH_M = Math.sqrt(2 * EARTH_R * EYE_M); // distance to the horizon
 const REACH = REACH_M * K;
+const GROUND_Y = -EYE_M * K; // the scene's origin is the observer's eye
+// how far the Earth's surface has curved away below the observer's level, at
+// horizontal distance d metres (scene units)
+const drop = (d) => ((d * d) / (2 * EARTH_R)) * K;
+
+// A horizontal disc of radius r (scene units) that follows the Earth's curve.
+function curvedDisc(r, segments) {
+  const g = new THREE.CircleGeometry(r, segments, 0, 2 * Math.PI);
+  g.rotateX(-Math.PI / 2);
+  const pos = g.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    pos.setY(i, -drop(Math.hypot(pos.getX(i), pos.getZ(i)) / K));
+  }
+  return g;
+}
+
+const groundLayer = new THREE.Mesh(curvedDisc(REACH, 160), ground.material);
+groundLayer.position.y = GROUND_Y;
+groundLayer.visible = false;
+scene.add(groundLayer);
 
 // Étage limits in feet, as used for reporting.
 const ETAGES = {
@@ -291,7 +317,7 @@ function labelSprite(text, size) {
 }
 
 // A height mast beside the observer with the étage boundaries marked.
-const MAST = dirFromAzEl(320 * DEG, 0, 50); // 5,000 ft away, behind the dome as first seen
+const MAST = dirFromAzEl(320 * DEG, 0, 50).setY(GROUND_Y); // 5,000 ft away, behind the dome as first seen
 const etageMarker = new THREE.Mesh(
   new THREE.CylinderGeometry(0.25, 0.25, 1, 12),
   new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.6 }),
@@ -299,25 +325,24 @@ const etageMarker = new THREE.Mesh(
 {
   const top = 45000 * FT * K;
   layerDecor.add(new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints([MAST.clone(), MAST.clone().setY(top)]),
+    new THREE.BufferGeometry().setFromPoints([MAST.clone(), MAST.clone().setY(GROUND_Y + top)]),
     new THREE.LineBasicMaterial({ color: 0xaec6e0, transparent: true, opacity: 0.8 }),
   ));
   layerDecor.add(etageMarker);
   for (const ft of [6500, 20000]) {
     const y = ft * FT * K;
     const disc = new THREE.Mesh(
-      new THREE.CircleGeometry(REACH, 96),
+      curvedDisc(REACH, 96),
       new THREE.MeshBasicMaterial({ color: 0xaec6e0, transparent: true, opacity: 0.035, side: THREE.DoubleSide, depthWrite: false }),
     );
-    disc.rotation.x = -Math.PI / 2;
-    disc.position.y = y;
+    disc.position.y = GROUND_Y + y;
     const tick = labelSprite(`${ft.toLocaleString('en-CA')} ft`, 0.035);
-    tick.position.copy(MAST).setY(y);
+    tick.position.copy(MAST).setY(GROUND_Y + y);
     layerDecor.add(disc, tick);
   }
   for (const [key, e] of Object.entries(ETAGES)) {
     const label = labelSprite(`${e.name} étage`, 0.045);
-    label.position.copy(MAST).setY(((e.band[0] + Math.min(e.band[1], 40000)) / 2) * FT * K);
+    label.position.copy(MAST).setY(GROUND_Y + ((e.band[0] + Math.min(e.band[1], 40000)) / 2) * FT * K);
     etageLabels[key] = label;
     layerDecor.add(label);
   }
@@ -327,7 +352,7 @@ function updateEtageDecor() {
   const [lo, hi] = ETAGES[layerParams.etage].band;
   const y0 = lo * FT * K, y1 = Math.min(hi, 45000) * FT * K;
   etageMarker.scale.set(1, y1 - y0, 1);
-  etageMarker.position.copy(MAST).setY((y0 + y1) / 2);
+  etageMarker.position.copy(MAST).setY(GROUND_Y + (y0 + y1) / 2);
   for (const [key, label] of Object.entries(etageLabels)) label.userData.draw(key === layerParams.etage);
 }
 
@@ -351,10 +376,9 @@ sheetCanvas.width = sheetCanvas.height = SHEET_PX;
 const sheetTexture = new THREE.CanvasTexture(sheetCanvas);
 const sheetMeshes = [0xd9dee5, 0xf6f7f9].map((color) => {
   const m = new THREE.Mesh(
-    new THREE.CircleGeometry(REACH, 160),
+    curvedDisc(REACH, 160),
     new THREE.MeshBasicMaterial({ color, alphaMap: sheetTexture, alphaTest: 0.5, side: THREE.DoubleSide }),
   );
-  m.rotation.x = -Math.PI / 2;
   m.visible = false;
   scene.add(m);
   return m;
@@ -388,7 +412,7 @@ function drawSheet() {
   sheetMeshes.forEach((m, i) => {
     if ((m.material.alphaTest > 0) !== (test > 0)) m.material.needsUpdate = true;
     m.material.alphaTest = test;
-    m.position.y = (i === 0 ? base : base + thickness) * K;
+    m.position.y = GROUND_Y + (i === 0 ? base : base + thickness) * K;
     m.visible = !(i === 1 && thickness < 20);
   });
 }
@@ -396,8 +420,11 @@ function drawSheet() {
 function updateCloudMeshes() {
   const on = mode === 'layer';
   layerDecor.visible = on;
-  observer.scale.setScalar(on ? 0.7 : 1); // about 6 ft against the 100 ft dome
-  ground.scale.setScalar(on ? (REACH * 1.2) / 1.6 : 1);
+  // to scale: 1.7 m tall, feet on the ground (the figure is 0.086 units tall)
+  observer.scale.setScalar(on ? (EYE_M * K) / 0.086 : 1);
+  observer.position.y = on ? GROUND_Y : 0;
+  ground.visible = !on;
+  groundLayer.visible = on;
   cloudMesh.count = 0;
   sheetMeshes.forEach((m) => { m.visible = false; });
   if (!on) return;
@@ -412,7 +439,7 @@ function updateCloudMeshes() {
   list.forEach((c, i) => {
     const h = c.top - c.base;
     m.makeScale(c.r, h, c.r);
-    m.setPosition(c.x, c.base + h / 2, -c.y);
+    m.setPosition(c.x, GROUND_Y + c.base + h / 2 - drop(c.d), -c.y);
     cloudMesh.setMatrixAt(i, m);
   });
   cloudMesh.count = list.length;
@@ -449,12 +476,14 @@ function setView(v, { yaw } = {}) {
 function resetOutside() {
   if (mode === 'layer') {
     // low, looking up: the 100 ft dome in front, the cloud layer above
-    orbit.maxDistance = 3000;
+    orbit.maxDistance = 600; // the drawn scene ends at the horizon, 152 units out
+    orbit.maxPolarAngle = Math.PI / 2 - 0.01; // stay above the ground
     camera.fov = 60;
-    camera.position.set(7, 2, 8.5);
-    orbit.target.set(0, 5, 0);
+    camera.position.set(7, 2.6, 8.5);
+    orbit.target.set(0, 2, 0);
   } else {
     orbit.maxDistance = 7;
+    orbit.maxPolarAngle = Math.PI / 2 + 0.35;
     camera.fov = 45;
     camera.position.set(2.1, 1.5, 2.4);
     orbit.target.set(0, 0.25, 0);
@@ -686,13 +715,16 @@ function updateLayerPanel() {
 
 // ================================================================ update loop
 
+// Rays start at the observer's eye, 1.7 m above the ground.
+const rayParams = (quick) => ({ ...layerParams, base: layerParams.base - EYE_M, quick });
+
 function recompute() {
   if (mode === 'layer') {
     const quick = !!baseTween;
     layerParams.cover = layerParams.coverMode === 'dome'
-      ? solvePlanCover({ ...layerParams, quick }, layerParams.octas / 8, layerParams.cover)
+      ? solvePlanCover(rayParams(quick), layerParams.octas / 8, layerParams.cover)
       : layerParams.octas / 8;
-    layerGeo = castLayer({ ...layerParams, quick }, cover);
+    layerGeo = castLayer(rayParams(quick), cover);
     let s = 0;
     for (let k = 0; k < N; k++) s += cover[k] * grid.weight[k];
     coveredFrac = s;
@@ -911,7 +943,6 @@ $$('#units button').forEach((b) => b.addEventListener('click', () => {
   layerCtl.base.sync();
   layerCtl.thickness.sync();
 }));
-$('#lcurve').addEventListener('change', (e) => { layerParams.curved = e.target.checked; dirty = true; });
 $('#lshow').addEventListener('change', (e) => { layerParams.showClouds = e.target.checked; dirty = true; });
 $('#lreseed').addEventListener('click', () => { layerParams.seed = 1 + Math.floor(Math.random() * 1e6); dirty = true; });
 

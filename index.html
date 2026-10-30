@@ -123,10 +123,13 @@
       <section class="tab" id="tab-layer" hidden>
         <p class="help">
           One cloud layer, parallel to the ground, seen by the observer at the
-          centre. Everything is to scale: the observer is about 6 ft tall, the
+          centre. Everything is to scale: the observer's eye is 1.7 m up, the
           dome has a 100 ft radius, and the clouds sit at their real heights
-          above it. Zoom out to see the whole layer and the height mast with
-          the three étages.
+          above it. Only what lies within the observer's horizon, 4.65 km
+          away, is drawn; the ground and clouds follow the Earth's curve.
+          The pattern on the dome includes the whole layer, out to where it
+          meets the horizon. Zoom out to see the height mast with the three
+          étages.
         </p>
 
         <fieldset class="field">
@@ -183,7 +186,6 @@
           <input type="range" id="lext" min="2" max="400" step="1" value="400">
         </label>
         <div class="row">
-          <label class="check"><input type="checkbox" id="lcurve" checked> Earth curvature</label>
           <label class="check"><input type="checkbox" id="lshow" checked> Draw nearby clouds</label>
           <button id="lreseed">Reshuffle</button>
         </div>
@@ -310,6 +312,13 @@
           brings the layer down to your horizon. That is thousands of times
           more cloud area. Low sky is where distant weather and other layers
           pile up.
+        </p>
+        <p>
+          Compare that with the ground. With your eye 1.7 m up, the ground
+          horizon is only <code>√(2Rh)</code> ≈ 4.65 km away (R is the
+          Earth's radius, 6371 km). A cloud layer at 4,000 ft only meets your
+          horizon about 125 km away. So the clouds near your horizon are far
+          beyond the ground you can see.
         </p>
 
         <h3>6. Reporting rules (verify against MANOBS)</h3>
