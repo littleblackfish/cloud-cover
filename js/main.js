@@ -35,7 +35,6 @@ const quiz = { answered: false, right: 0, total: 0, streak: 0 };
 let mode = 'octas'; // 'octas' | 'layer' | 'quiz'
 let view = 'outside';
 let guides = 'lying';
-let mapProjection = 'equal-area';
 let dirty = true;
 
 // ================================================================ transitions
@@ -762,14 +761,11 @@ const MAP_R = MAP / 2 - 26;
 const mapImage = mapCtx.createImageData(MAP, MAP);
 let mapLookup = null;
 
-// zenith angle (rad) at normalised map radius r, and the inverse
-const projections = {
-  'equal-area': { theta: (r) => 2 * Math.asin(r / Math.SQRT2), radius: (t) => Math.SQRT2 * Math.sin(t / 2) },
-  fisheye: { theta: (r) => (r * Math.PI) / 2, radius: (t) => t / (Math.PI / 2) },
-};
+// Equal-area projection, so area on the map is proportional to octas:
+// zenith angle (rad) at normalised map radius r, and the inverse.
+const proj = { theta: (r) => 2 * Math.asin(r / Math.SQRT2), radius: (t) => Math.SQRT2 * Math.sin(t / 2) };
 
 function buildMapLookup() {
-  const proj = projections[mapProjection];
   mapLookup = new Int32Array(MAP * MAP).fill(-1);
   for (let py = 0; py < MAP; py++) {
     for (let px = 0; px < MAP; px++) {
@@ -807,7 +803,6 @@ function drawSkyMap() {
   mapCtx.clearRect(0, 0, MAP, MAP);
   mapCtx.putImageData(mapImage, 0, 0);
 
-  const proj = projections[mapProjection];
   const c = MAP / 2;
   const ringR = (eDeg) => proj.radius((90 - eDeg) * DEG) * MAP_R;
   mapCtx.save();
@@ -1394,20 +1389,6 @@ $$('.view-switch [data-view]').forEach((b) => b.addEventListener('click', () => 
   if (b.dataset.view !== view) setView(b.dataset.view);
 }));
 $('#reset-view').addEventListener('click', () => setView(view, { reset: true }));
-
-$('#skymap-proj').addEventListener('click', () => {
-  mapProjection = mapProjection === 'equal-area' ? 'fisheye' : 'equal-area';
-  $('#skymap-title').textContent = mapProjection === 'equal-area'
-    ? 'All-sky map, equal-area' : 'All-sky map, fisheye (equidistant)';
-  $('#skymap-proj').textContent = mapProjection === 'equal-area' ? 'switch to fisheye' : 'switch to equal-area';
-  // crossfade the map through its change of projection
-  mapCanvas.style.opacity = 0;
-  setTimeout(() => {
-    mapLookup = null;
-    drawSkyMap();
-    mapCanvas.style.opacity = 1;
-  }, REDUCED_MOTION ? 0 : 180);
-});
 
 // Hide or show the side panel; the 3D view takes the whole window.
 $('#panel-toggle').addEventListener('click', (ev) => {

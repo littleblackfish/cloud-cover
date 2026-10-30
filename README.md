@@ -14,8 +14,7 @@ and is hosted on GitHub Pages without a build step.
 - **Outside / Inside views:** orbit the translucent dome from outside, or
   stand at the observer's position and look around.
 - **All-sky map:** a flat map of the whole dome. In the equal-area
-  projection, area on the map is proportional to octas. Switch to *fisheye*
-  to see how a camera-style projection distorts it.
+  projection, area on the map is proportional to octas.
 - **Cloud layer tab:** one flat cloud layer in the low, mid or high étage,
   either cumuliform (separate elements) or stratiform (a sheet with gaps).
   Coverage is picked in octas as seen on the dome; the clouds are sized to

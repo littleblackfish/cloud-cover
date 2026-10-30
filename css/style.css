@@ -128,10 +128,6 @@ body {
 }
 .skymap { transition: opacity .3s ease; }
 .skymap.hidden { opacity: 0; pointer-events: none; }
-button.link {
-  background: none; border: 0; padding: 0; font: inherit;
-  color: #7fb2ff; cursor: pointer; text-decoration: underline;
-}
 
 .readout {
   position: absolute; right: 12px; bottom: 12px;
