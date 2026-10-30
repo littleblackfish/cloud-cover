@@ -7,6 +7,7 @@ and is hosted on GitHub Pages without a build step.
 ## What it does
 
 - **Octas tab:** shows the dome with 0–8 octas of cloud as an orange slice,
+  an orange lying on its side (180° slices from the north horizon to the south),
   a round patch, a horizon ring, clumps or random patches. The *Deform*
   controls change the outline while the covered area stays exactly fixed.
 - **Outside / Inside views:** orbit the translucent dome from outside, or
@@ -17,7 +18,8 @@ and is hosted on GitHub Pages without a build step.
 - **Cloud layer tab:** a horizontal layer of cloud cylinders, ray-traced from
   the observer with Earth curvature included. It compares the layer's real
   map-view coverage with the coverage you would see on the dome, including the
-  packing effect near the horizon.
+  packing effect near the horizon. Heights are in feet by default, with a
+  switch to metres.
 - **Quiz tab:** random skies to estimate, scored using the octa rounding rules.
 - **Notes tab:** the geometry, explained for a beginner observer in Canada.
 

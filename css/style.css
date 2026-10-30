@@ -52,6 +52,7 @@
   }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; }
 body {
   background: var(--bg);
@@ -216,3 +217,6 @@ code { font-size: 12.5px; background: var(--chip); padding: 1px 4px; border-radi
   .readout { min-width: 0; padding: 8px 10px; }
   .readout .big { font-size: 22px; }
 }
+
+.field.units { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.field.units > span { margin: 0; }

@@ -7,6 +7,7 @@ import {
 import { castLayer, nearbyClouds, distanceToHeight } from './layer.js';
 
 const DEG = Math.PI / 180;
+const FT = 0.3048; // metres per foot
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 
@@ -17,7 +18,7 @@ const shapeParams = {
   deform: 0, scale: 3, time: 0, seed: 1, animate: false,
 };
 const layerParams = {
-  cover: 0.3, base: 1200, thickness: 800, diameter: 900, extent: 250,
+  cover: 0.3, base: 4000 * FT, thickness: 2500 * FT, diameter: 900, extent: 250,
   curved: true, seed: 1, showClouds: true,
 };
 let quizParams = null;
@@ -157,17 +158,48 @@ scene.add(circleLine(0, 1.001, 0xaec6e0, 0.9));
 
 const guideGroup = new THREE.Group();
 scene.add(guideGroup);
+// Half great circles from one end of a horizontal axis (azimuth a0, degrees)
+// to the other, tilted every 22.5 deg: the lying orange's slice boundaries.
+// Points are [east, north, up].
+function lyingArcs(a0) {
+  const a = a0 * DEG;
+  const ax = [Math.sin(a), Math.cos(a), 0];
+  const px = [Math.cos(a), -Math.sin(a), 0];
+  const arcs = [];
+  for (let k = 1; k < 8; k++) {
+    const tilt = k * 22.5 * DEG;
+    const pts = [];
+    for (let i = 0; i <= 96; i++) {
+      const t = (i / 96) * Math.PI;
+      const c = Math.cos(t), sn = Math.sin(t);
+      pts.push([
+        ax[0] * c + px[0] * Math.cos(tilt) * sn,
+        ax[1] * c + px[1] * Math.cos(tilt) * sn,
+        Math.sin(tilt) * sn,
+      ]);
+    }
+    arcs.push(pts);
+  }
+  return arcs;
+}
 function guideSpec(g) {
-  if (g === 'quadrants') return { circles: [30, 60], meridians: [0, 90, 180, 270] };
-  if (g === 'slices') return { circles: [], meridians: [0, 45, 90, 135, 180, 225, 270, 315] };
-  if (g === 'bands') return { circles: OCTA_BAND_ELEVATIONS.slice(1, 8), meridians: [] };
-  return { circles: [], meridians: [] };
+  if (g === 'quadrants') return { circles: [30, 60], meridians: [0, 90, 180, 270], arcs: [] };
+  if (g === 'slices') return { circles: [], meridians: [0, 45, 90, 135, 180, 225, 270, 315], arcs: [] };
+  if (g === 'lying') return { circles: [], meridians: [], arcs: lyingArcs(shapeParams.azimuth) };
+  if (g === 'bands') return { circles: OCTA_BAND_ELEVATIONS.slice(1, 8), meridians: [], arcs: [] };
+  return { circles: [], meridians: [], arcs: [] };
 }
 function buildGuides() {
   guideGroup.clear();
-  const { circles, meridians } = guideSpec(guides);
+  const { circles, meridians, arcs } = guideSpec(guides);
   for (const e of circles) guideGroup.add(circleLine(e * DEG, 1.004, 0xffd27a, 0.75));
   for (const a of meridians) guideGroup.add(meridianLine(a * DEG, 1.004, 0xffd27a, 0.75));
+  for (const pts of arcs) {
+    guideGroup.add(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(pts.map(([e, n, u]) => toScene(e, n, u).multiplyScalar(1.004))),
+      new THREE.LineBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.75, depthWrite: false }),
+    ));
+  }
 }
 
 function textSprite(text, color = '#e6ebf1', size = 0.12) {
@@ -397,7 +429,18 @@ function drawSkyMap() {
   mapCtx.fillStyle = 'rgba(255, 210, 122, 0.95)';
   mapCtx.lineWidth = 1.5;
   mapCtx.font = '600 15px system-ui, sans-serif';
-  const { circles, meridians } = guideSpec(guides === 'none' ? 'none' : guides);
+  const { circles, meridians, arcs } = guideSpec(guides);
+  for (const pts of arcs) {
+    mapCtx.beginPath();
+    pts.forEach(([e, n, u], i) => {
+      const r = proj.radius(Math.acos(Math.min(1, Math.max(-1, u)))) * MAP_R;
+      const h = Math.hypot(e, n) || 1;
+      // north up, east on the left (looking up)
+      const x = c - (e / h) * r, y = c - (n / h) * r;
+      if (i) mapCtx.lineTo(x, y); else mapCtx.moveTo(x, y);
+    });
+    mapCtx.stroke();
+  }
   for (const e of circles) {
     mapCtx.beginPath();
     mapCtx.arc(c, c, ringR(e), 0, 2 * Math.PI);
@@ -532,7 +575,9 @@ function bindRange(id, obj, key, fmt, after) {
 }
 
 const octasCtl = bindRange('octas', shapeParams, 'octas', (v) => (Number.isInteger(v) ? v : v.toFixed(2)), () => syncChips());
-bindRange('azimuth', shapeParams, 'azimuth', (v) => `${v}°`);
+bindRange('azimuth', shapeParams, 'azimuth', (v) => `${v}°`, () => {
+  if (guides === 'lying') buildGuides();
+});
 bindRange('centre', shapeParams, 'centerElevation', (v) => `${v}°`);
 bindRange('clumps', shapeParams, 'clumps', (v) => v);
 bindRange('deform', shapeParams, 'deform', (v) => (v === 0 ? 'none' : v.toFixed(2)));
@@ -552,6 +597,7 @@ syncChips();
 
 const shapeHelp = {
   slice: 'Wedges from horizon to zenith. Each 45° of azimuth is exactly one octa.',
+  lying: 'The orange lies on its side. Each slice runs from the north horizon over the sky to the south horizon, a 180° arc. There are four slices on each side of the zenith, each one octa, filling from the east horizon. Direction turns the orange.',
   cap: 'A round patch. Move its centre down toward the horizon: the horizon clips it and it stretches to keep its area.',
   band: 'Cloud rising from the horizon all round. 4/8 only reaches 30° elevation.',
   clumps: 'Several round clouds of mixed sizes. Change the count: the total area stays the same.',
@@ -561,14 +607,23 @@ function syncShape() {
   $$('#shape button').forEach((b) => b.classList.toggle('on', b.dataset.shape === shapeParams.shape));
   $('#shape-help').textContent = shapeHelp[shapeParams.shape];
   const s = shapeParams.shape;
-  $('#f-azimuth').hidden = !(s === 'slice' || s === 'cap');
+  $('#f-azimuth').hidden = !(s === 'slice' || s === 'lying' || s === 'cap');
   $('#f-centre').hidden = s !== 'cap';
   $('#f-clumps').hidden = s !== 'clumps';
   $('#f-deform').hidden = s === 'patchy';
 }
+function setGuides(g) {
+  guides = g;
+  $$('#guides button').forEach((x) => x.classList.toggle('on', x.dataset.guides === g));
+  buildGuides();
+  drawSkyMap();
+}
 $$('#shape button').forEach((b) => b.addEventListener('click', () => {
   shapeParams.shape = b.dataset.shape;
   syncShape();
+  // show the matching slice outlines when switching between the two oranges
+  if (shapeParams.shape === 'lying' && guides === 'slices') setGuides('lying');
+  if (shapeParams.shape === 'slice' && guides === 'lying') setGuides('slices');
   dirty = true;
 }));
 syncShape();
@@ -580,30 +635,61 @@ $('#reseed').addEventListener('click', () => {
   $('#deform').dispatchEvent(new Event('input'));
 });
 
-$$('#guides button').forEach((b) => b.addEventListener('click', () => {
-  guides = b.dataset.guides;
-  $$('#guides button').forEach((x) => x.classList.toggle('on', x === b));
-  buildGuides();
-  drawSkyMap();
-}));
+$$('#guides button').forEach((b) => b.addEventListener('click', () => setGuides(b.dataset.guides)));
 
 // ---------------------------------------------------------------- layer tab
 
-const metres = (v) => fmtKm(v);
+// Heights (cloud base, thickness) are shown in feet or metres; everything is
+// stored in metres. Horizontal distances stay metric.
+let heightUnit = 'ft';
+const HEIGHT_RANGES = {
+  ft: { base: [1000, 20000, 100], thickness: [50, 16000, 50] },
+  m: { base: [300, 6000, 50], thickness: [10, 5000, 10] },
+};
+const fmtHeight = (m) => (heightUnit === 'ft'
+  ? `${(Math.round(m / FT / 10) * 10).toLocaleString('en-CA')} ft`
+  : `${Math.round(m).toLocaleString('en-CA')} m`);
+
+function bindHeight(id, key) {
+  const input = $(`#${id}`);
+  const out = $(`#${id}-out`);
+  const per = () => (heightUnit === 'ft' ? FT : 1);
+  const sync = () => { out.textContent = fmtHeight(layerParams[key]); };
+  const place = () => {
+    const [min, max, step] = HEIGHT_RANGES[heightUnit][key];
+    Object.assign(input, { min, max, step });
+    input.value = Math.round(layerParams[key] / per() / step) * step;
+    sync();
+  };
+  input.addEventListener('input', () => {
+    layerParams[key] = parseFloat(input.value) * per();
+    sync();
+    dirty = true;
+  });
+  place();
+  return { input, sync: place, set: (v) => { layerParams[key] = v; place(); } };
+}
+
 const layerCtl = {
   cover: bindRange('lcover', layerParams, 'cover', (v) => `${(v * 8).toFixed(1)}/8`),
-  base: bindRange('lbase', layerParams, 'base', metres),
-  thickness: bindRange('lthick', layerParams, 'thickness', metres),
-  diameter: bindRange('ldiam', layerParams, 'diameter', metres),
+  base: bindHeight('lbase', 'base'),
+  thickness: bindHeight('lthick', 'thickness'),
+  diameter: bindRange('ldiam', layerParams, 'diameter', fmtKm),
   extent: bindRange('lext', layerParams, 'extent', (v) => `${v} km`),
 };
+$$('#units button').forEach((b) => b.addEventListener('click', () => {
+  heightUnit = b.dataset.units;
+  $$('#units button').forEach((x) => x.classList.toggle('on', x === b));
+  layerCtl.base.sync();
+  layerCtl.thickness.sync();
+}));
 $('#lcurve').addEventListener('change', (e) => { layerParams.curved = e.target.checked; dirty = true; });
 $('#lshow').addEventListener('change', (e) => { layerParams.showClouds = e.target.checked; dirty = true; });
 $('#lreseed').addEventListener('click', () => { layerParams.seed = 1 + Math.floor(Math.random() * 1e6); dirty = true; });
 const presets = {
-  cu: { cover: 0.3, base: 1200, thickness: 800, diameter: 900 },
-  tcu: { cover: 0.3, base: 1000, thickness: 4000, diameter: 1500 },
-  flat: { cover: 0.3, base: 1200, thickness: 20, diameter: 900 },
+  cu: { cover: 0.3, base: 4000 * FT, thickness: 2500 * FT, diameter: 900 },
+  tcu: { cover: 0.3, base: 3000 * FT, thickness: 13000 * FT, diameter: 1500 },
+  flat: { cover: 0.3, base: 4000 * FT, thickness: 60 * FT, diameter: 900 },
 };
 $$('#layer-presets button').forEach((b) => b.addEventListener('click', () => {
   for (const [k, v] of Object.entries(presets[b.dataset.preset])) layerCtl[k].set(v);

@@ -119,6 +119,14 @@ export function computeField(params, out) {
 
   if (shape === 'slice') {
     for (let k = 0; k < N; k++) out[k] = -Math.abs(wrapPi(az[k] - a0));
+  } else if (shape === 'lying') {
+    // An orange lying on its side, its axis along the horizon toward azimuth
+    // a0. Every slice is a lune bounded by two half great circles running from
+    // one end of the axis, over the sky, to the other (180 degree arcs). The
+    // dome holds 180 degrees of lune, so each 22.5 degrees is one octa: four
+    // slices on each side of the zenith. Cloud fills from the horizon at a0+90.
+    const px = Math.cos(a0), py = -Math.sin(a0);
+    for (let k = 0; k < N; k++) out[k] = -Math.atan2(z[k], x[k] * px + y[k] * py);
   } else if (shape === 'cap') {
     const e0 = centerElevation * DEG;
     const cx = Math.sin(a0) * Math.cos(e0), cy = Math.cos(a0) * Math.cos(e0), cz = Math.sin(e0);
