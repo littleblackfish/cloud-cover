@@ -262,6 +262,9 @@ fieldTexture.minFilter = THREE.LinearFilter;
 const domeUniforms = {
   ...layerUniforms,
   layerOn: { value: 0 },
+  // how much of the cloud layer's projection the dome shows: all of it from
+  // outside, none from inside, where the layer itself lines up with it
+  projection: { value: 1 },
   field: { value: fieldTexture },
   threshold: { value: 0 },
   skyColor: { value: new THREE.Vector3(120 / 255, 170 / 255, 225 / 255) },
@@ -292,6 +295,7 @@ const dome = new THREE.Mesh(
       uniform float threshold, skyAlpha, cloudAlpha;
       uniform vec3 skyColor, cloudColor;
       uniform int layerOn;
+      uniform float projection;
       varying vec2 vUv;
       varying vec3 vDir;
       #include <logdepthbuf_pars_fragment>
@@ -309,7 +313,7 @@ const dome = new THREE.Mesh(
           vec2 g = s.xy / hl * dist;
           vec2 gx = dFdx(g), gy = dFdy(g);
           float r = region(s), rw = fwidth(r);
-          a = s.z < 0.0 ? 0.0 : layerCloud(r, rw, g, gx, gy);
+          a = s.z < 0.0 ? 0.0 : projection * layerCloud(r, rw, g, gx, gy);
         } else {
           float f = texture2D(field, vUv).r;
           float w = max(fwidth(f), 1e-5);
@@ -532,6 +536,7 @@ const SURFACE_FRAG = `
   #include <logdepthbuf_pars_fragment>
   uniform vec3 color;
   uniform float metresPerUnit; // also the dome's radius in metres
+  uniform float planeVis; // how strongly the bare layer shows (0..1)
   varying vec2 vGround;
   ${LAYER_GLSL}
   void main() {
@@ -544,13 +549,21 @@ const SURFACE_FRAG = `
     // The layer itself is a faint plane; the cloud patch on it is solid.
     // Full brightness inside the dome, dimming with distance beyond it.
     float far = smoothstep(1.0, 4.0, length(vec3(vGround, layerHeight)) / metresPerUnit);
-    vec3 c = mix(vec3(0.5, 0.58, 0.68), color, a) * mix(1.0, 0.6, far);
-    gl_FragColor = vec4(c, mix(0.06, mix(0.95, 0.75, far), a));
+    // The bare layer: a faint fill and a grid, half the base height apart,
+    // so its flatness reads in perspective. Grid lines fade out where the
+    // cells shrink to a few pixels.
+    vec2 q = vGround / (0.5 * max(layerHeight, 100.0));
+    vec2 qw = max(fwidth(q), vec2(1e-5));
+    vec2 gd = abs(fract(q - 0.5) - 0.5) / qw;
+    float grid = (1.0 - min(min(gd.x, gd.y), 1.0)) * (1.0 - smoothstep(0.08, 0.3, max(qw.x, qw.y)));
+    float plane = planeVis * max(0.08, 0.5 * grid);
+    vec3 c = mix(vec3(0.70, 0.75, 0.82), color, a) * mix(1.0, 0.6, far);
+    gl_FragColor = vec4(c, mix(plane, mix(0.95, 0.75, far), a));
   }`;
 const layerSurface = new THREE.Mesh(
   new THREE.BufferGeometry(),
   new THREE.ShaderMaterial({
-    uniforms: { ...layerUniforms, metresPerUnit, color: { value: new THREE.Color(0xeef1f5) } },
+    uniforms: { ...layerUniforms, metresPerUnit, planeVis: { value: 0.6 }, color: { value: new THREE.Color(0xeef1f5) } },
     vertexShader: SURFACE_VERT,
     fragmentShader: SURFACE_FRAG,
     // seen from outside, one sample per pixel is enough (the dome uses four)
@@ -560,7 +573,9 @@ const layerSurface = new THREE.Mesh(
     depthWrite: true, // so the dome is hidden where the layer lies in front of it
   }),
 );
-layerSurface.renderOrder = 1; // before the dome
+// drawn after the dome, so neither the dome's tint nor its projection
+// covers the layer
+layerSurface.renderOrder = 3;
 layerSurface.frustumCulled = false;
 layerSurface.visible = false;
 layerSurface.userData.radius = 0;
@@ -611,9 +626,7 @@ function updateCloudMeshes() {
     layerSurface.userData.radius = reach;
   }
   layerSurface.position.y = GROUND_Y + layerParams.base * K;
-  // From inside, the 3D layer lines up exactly with the clouds on the dome,
-  // so drawing it again there would only cost time.
-  layerSurface.visible = !settledInside;
+  layerSurface.visible = true;
 }
 
 // ================================================================ cameras
@@ -625,9 +638,6 @@ orbit.maxDistance = 7; // widened in cloud-layer mode
 orbit.maxPolarAngle = Math.PI / 2 + 0.35;
 
 const look = { yaw: 0, pitch: 25 * DEG, fov: 80, drag: null };
-
-// True once the camera has arrived inside the dome (not while flying in).
-let settledInside = false;
 
 // The camera flies between views. While it flies, neither the orbit
 // controls nor the inside look-around drive it.
@@ -693,8 +703,6 @@ function setView(v, { yaw, reset = false, instant = false } = {}) {
   if (v === 'outside') {
     setOrbitLimits();
     setObserverVisible(true);
-    settledInside = false;
-    dirty = true; // bring the 3D layer back for the way out
     const o = OUTSIDE[mode === 'layer' ? 'layer' : 'octas'];
     const h = reset ? o.heading : heading;
     const sc = mode === 'layer' ? layerViewScale() : 1;
@@ -715,14 +723,21 @@ function setView(v, { yaw, reset = false, instant = false } = {}) {
     flyTo(new THREE.Vector3(0, 0, 0), dirFromAzEl(look.yaw, look.pitch), look.fov, ms, () => {
       const inside = view === 'inside';
       setObserverVisible(!inside);
-      settledInside = inside;
-      dirty = true; // the 3D layer can go now
     });
     $('#view-hint').textContent = 'Drag to look around · scroll to change field of view';
   }
-  // the sky is tinted more strongly from inside
+  // The sky is tinted more strongly from inside. There the cloud layer itself
+  // lines up with its projection on the dome, so the projection fades out.
   const a0 = domeUniforms.skyAlpha.value, a1 = v === 'inside' ? 0.62 : 0.2;
-  animate('sky', ms, (e) => { domeUniforms.skyAlpha.value = a0 + (a1 - a0) * e; });
+  const p0 = domeUniforms.projection.value, p1 = v === 'inside' ? 0 : 1;
+  // the bare layer is faint from outside, plainer from inside, under the sky
+  const planeU = layerSurface.material.uniforms.planeVis;
+  const q0 = planeU.value, q1 = v === 'inside' ? 1 : 0.6;
+  animate('sky', ms, (e) => {
+    domeUniforms.skyAlpha.value = a0 + (a1 - a0) * e;
+    domeUniforms.projection.value = p0 + (p1 - p0) * e;
+    planeU.value = q0 + (q1 - q0) * e;
+  });
 }
 
 canvas.addEventListener('pointerdown', (ev) => {
@@ -1027,10 +1042,6 @@ function frame(now) {
     if (view === 'inside') updateInsideCamera();
     else if (orbit.update()) needsRender = true; // true while moving or easing
   }
-  // From outside, draw the layer over the dome's tinted shell, so the clouds
-  // inside the dome are not darkened by it; from inside, the dome's own cloud
-  // pattern goes on top.
-  layerSurface.renderOrder = view === 'outside' ? 3 : 1;
   // Only draw when something changed: the cloud layer is costly per pixel,
   // and a still scene needs no redrawing.
   if (needsRender) {
