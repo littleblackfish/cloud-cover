@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Celestial Dome Octas</title>
+  <meta name="description" content="Interactive 3D trainer for estimating cloud amount in octas on the celestial dome.">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.min.js" } }
+  </script>
+</head>
+<body>
+  <div class="app">
+    <main class="stage">
+      <canvas id="view" aria-label="3D view of the celestial dome"></canvas>
+
+      <div class="view-switch" role="group" aria-label="Viewpoint">
+        <button data-view="outside" class="on">Outside the dome</button>
+        <button data-view="inside">Inside (observer)</button>
+        <button id="reset-view" title="Reset camera">Reset</button>
+      </div>
+      <p class="hint" id="view-hint">Drag to orbit · scroll to zoom</p>
+
+      <figure class="skymap">
+        <canvas id="skymap" width="440" height="440" aria-label="All-sky map"></canvas>
+        <figcaption>
+          <span id="skymap-title">All-sky map, equal-area</span>
+          <button id="skymap-proj" class="link">switch to fisheye</button>
+        </figcaption>
+      </figure>
+
+      <div class="readout" id="readout" aria-live="polite"></div>
+    </main>
+
+    <aside class="panel">
+      <header>
+        <h1>Celestial Dome Octas</h1>
+        <p class="sub">See what 0–8 eighths of the sky really look like.</p>
+      </header>
+
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-tab="octas" class="on">Octas</button>
+        <button role="tab" data-tab="layer">Cloud layer</button>
+        <button role="tab" data-tab="quiz">Quiz</button>
+        <button role="tab" data-tab="notes">Notes</button>
+      </nav>
+
+      <!-- ===================================================== OCTAS -->
+      <section class="tab" id="tab-octas">
+        <label class="field">
+          <span>Coverage <span><output id="octas-out">3</output> / 8</span></span>
+          <input type="range" id="octas" min="0" max="8" step="0.05" value="3">
+        </label>
+        <div class="chips" id="octa-chips"></div>
+
+        <fieldset class="field">
+          <legend>Starting shape</legend>
+          <div class="seg" id="shape">
+            <button data-shape="slice" class="on">Orange slice</button>
+            <button data-shape="cap">Round patch</button>
+            <button data-shape="band">Horizon ring</button>
+            <button data-shape="clumps">Clumps</button>
+            <button data-shape="patchy">Patchy</button>
+          </div>
+          <p class="help" id="shape-help"></p>
+        </fieldset>
+
+        <label class="field" id="f-azimuth">
+          <span>Direction (azimuth) <output id="azimuth-out">0°</output></span>
+          <input type="range" id="azimuth" min="0" max="359" step="1" value="0">
+        </label>
+        <label class="field" id="f-centre">
+          <span>Patch centre elevation <output id="centre-out">90°</output></span>
+          <input type="range" id="centre" min="0" max="90" step="1" value="90">
+        </label>
+        <label class="field" id="f-clumps">
+          <span>Number of clumps <output id="clumps-out">6</output></span>
+          <input type="range" id="clumps" min="1" max="30" step="1" value="6">
+        </label>
+
+        <fieldset class="field">
+          <legend>Deform (coverage stays fixed)</legend>
+          <label class="sub-field" id="f-deform">
+            <span>Amount <output id="deform-out">0</output></span>
+            <input type="range" id="deform" min="0" max="1.5" step="0.01" value="0">
+          </label>
+          <label class="sub-field">
+            <span>Feature size <output id="scale-out">medium</output></span>
+            <input type="range" id="scale" min="1" max="8" step="0.1" value="3">
+          </label>
+          <div class="row">
+            <label class="check"><input type="checkbox" id="animate"> Let it drift</label>
+            <button id="reseed">New random shape</button>
+          </div>
+        </fieldset>
+
+        <fieldset class="field">
+          <legend>Guides on the dome</legend>
+          <div class="seg" id="guides">
+            <button data-guides="none">None</button>
+            <button data-guides="quadrants" class="on">Quadrants + 30°/60°</button>
+            <button data-guides="slices">8 slices</button>
+            <button data-guides="bands">8 equal bands</button>
+          </div>
+        </fieldset>
+
+        <div class="callout">
+          <strong>Why does it look wrong?</strong> Try <em>Horizon ring</em> at 4/8:
+          half the dome is the strip below 30° elevation. Then try
+          <em>Round patch</em> at 1/8: one octa around the zenith only reaches
+          down to 61°. See the Notes tab for why.
+        </div>
+      </section>
+
+      <!-- ===================================================== LAYER -->
+      <section class="tab" id="tab-layer" hidden>
+        <p class="help">
+          A layer of identical cloud elements, parallel to the ground, viewed
+          from the observer at the centre. Compare the layer's real
+          (map-view) coverage with what it covers on the dome.
+        </p>
+        <div class="seg" id="layer-presets">
+          <button data-preset="cu">Fair-weather cumulus</button>
+          <button data-preset="tcu">Towering cumulus</button>
+          <button data-preset="flat">Thin flat patches</button>
+        </div>
+
+        <label class="field">
+          <span>Real coverage, map view <output id="lcover-out"></output></span>
+          <input type="range" id="lcover" min="0.02" max="0.9" step="0.01" value="0.3">
+        </label>
+        <label class="field">
+          <span>Cloud base height <output id="lbase-out"></output></span>
+          <input type="range" id="lbase" min="300" max="6000" step="50" value="1200">
+        </label>
+        <label class="field">
+          <span>Cloud thickness (base to top) <output id="lthick-out"></output></span>
+          <input type="range" id="lthick" min="10" max="5000" step="10" value="800">
+        </label>
+        <label class="field">
+          <span>Cloud diameter <output id="ldiam-out"></output></span>
+          <input type="range" id="ldiam" min="200" max="4000" step="50" value="900">
+        </label>
+        <label class="field">
+          <span>Layer extends out to <output id="lext-out"></output></span>
+          <input type="range" id="lext" min="2" max="250" step="1" value="250">
+        </label>
+        <div class="row">
+          <label class="check"><input type="checkbox" id="lcurve" checked> Earth curvature</label>
+          <label class="check"><input type="checkbox" id="lshow" checked> Draw nearby clouds</label>
+          <button id="lreseed">Reshuffle</button>
+        </div>
+
+        <div class="compare" id="layer-compare"></div>
+
+        <h3>Where each octa of your sky is looking</h3>
+        <p class="help">
+          The dome split into eight equal-area bands, horizon at the bottom.
+          Bars show how much of each band is covered;
+          the tick marks the real map-view coverage.
+        </p>
+        <table class="bands" id="layer-bands">
+          <thead>
+            <tr><th>Elevation</th><th>Distance to cloud base</th><th>Covered in band</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <!-- ===================================================== QUIZ -->
+      <section class="tab" id="tab-quiz" hidden>
+        <p class="help">
+          A random sky is drawn. Estimate the amount, then check.
+          Tip: try it from <em>Inside</em>, the view you get in the field.
+        </p>
+        <div class="row">
+          <button id="quiz-new" class="primary">New sky</button>
+          <label class="check"><input type="checkbox" id="quiz-inside" checked> Put me inside</label>
+          <label class="check"><input type="checkbox" id="quiz-hidemap" checked> Hide sky map</label>
+        </div>
+        <div class="chips answer" id="quiz-answers"></div>
+        <p class="quiz-result" id="quiz-result" aria-live="polite"></p>
+        <p class="score" id="quiz-score"></p>
+      </section>
+
+      <!-- ===================================================== NOTES -->
+      <section class="tab notes" id="tab-notes" hidden>
+        <h2>Notes for a new observer</h2>
+        <p class="help">
+          Worked out from geometry. The rules section summarises common
+          practice; the authority for Canadian observing is ECCC's
+          <em>MANOBS</em> and your instructor, so check anything that matters
+          there.
+        </p>
+
+        <h3>1. What an octa measures</h3>
+        <p>
+          Cloud amount is the fraction of the <strong>celestial dome</strong>
+          hidden by cloud. The dome is the whole half of the sky above your
+          horizon, every direction you could look from where you stand.
+          An octa is one eighth of it. What counts is how much of your
+          <em>view</em> is covered (its solid angle). It is not the ground
+          area under the cloud, and it is not the area on a photograph.
+        </p>
+
+        <h3>2. The dome's area is not where you expect it</h3>
+        <p>
+          The sky area above elevation <var>e</var> is proportional to
+          <code>1 − sin e</code>. So the fraction of the sky <em>below</em>
+          <var>e</var> is <code>sin e</code>. Some results:
+        </p>
+        <ul>
+          <li><strong>Half the dome lies below 30°.</strong> (sin 30° = ½)</li>
+          <li>The lowest octa is the strip from the horizon up to only <strong>7°</strong>.</li>
+          <li>The octa around the zenith is a circle reaching down to <strong>61°</strong>,
+            only 29° from straight up.</li>
+        </ul>
+        <table class="mini">
+          <thead><tr><th>Octas of sky below</th><th>Elevation</th></tr></thead>
+          <tbody id="band-table"></tbody>
+        </table>
+        <p>
+          Why: imagine the dome as a stack of rings. A ring at elevation
+          <var>e</var> has circumference proportional to <code>cos e</code>.
+          It is long near the horizon and shrinks to a point overhead. Low
+          rings hold most of the area.
+        </p>
+
+        <h3>3. Slices and quadrants</h3>
+        <p>
+          Cut the dome like an orange, from the horizon to the zenith. Every
+          45° wedge is exactly one octa, and every quadrant (N‑E, E‑S…) is two.
+          A common way to estimate: judge each quadrant in eighths, then add
+          them up. A slice looks wide at the horizon and comes to a point
+          overhead, but each slice has the same area.
+        </p>
+
+        <h3>4. Your eye squashes the dome</h3>
+        <p>
+          Most people see the sky as a flattened bowl, not a hemisphere. Asked
+          to point halfway between horizon and zenith, they usually point
+          around 20–30°, not 45°. So check elevations with your hand. At arm's
+          length a closed fist is about 10° and a spread hand about 20°.
+          Three fists up from the horizon is roughly 30°, and all the sky
+          below that line is half the dome.
+        </p>
+
+        <h3>5. The packing effect: a layer looks thicker near the horizon</h3>
+        <p>
+          A cloud overhead shows you its flat base. A cloud far off near the
+          horizon shows you its <em>side</em>. With cumulus that have real
+          depth, the sides of distant clouds fill the gaps between them. A
+          layer with 3/8 real coverage can look solid low down.
+          The <em>Cloud layer</em> tab shows this. Use
+          <em>Thin flat patches</em> to remove the effect and
+          <em>Towering cumulus</em> to make it strong.
+        </p>
+        <p>
+          Distance also matters. A ray at elevation <var>e</var> meets a
+          cloud base at height <var>h</var> about <code>h / tan e</code>
+          away. For a 1200 m base, the top half of your sky (above 30°) looks
+          at a circle of cloud only about 2 km in radius. The bottom half looks at a
+          ring stretching out to about 120 km, where the Earth's curvature
+          brings the layer down to your horizon. That is thousands of times
+          more cloud area. Low sky is where distant weather and other layers
+          pile up.
+        </p>
+
+        <h3>6. Reporting rules (verify against MANOBS)</h3>
+        <ul>
+          <li><strong>0</strong> means no cloud at all. Any trace of cloud, even less
+            than an eighth, is reported as at least <strong>1</strong>.</li>
+          <li><strong>8</strong> means fully covered, no gaps. Any blue showing makes it
+            at most <strong>7</strong>.</li>
+          <li>Otherwise round to the nearest eighth.</li>
+          <li>METAR terms: FEW 1–2, SCT 3–4, BKN 5–7, OVC 8 octas. The lowest
+            BKN or OVC layer (or a vertical visibility) is the ceiling.</li>
+          <li><strong>Summation principle</strong>, used in Canada and the US:
+            the amount given for a layer is the sky hidden by that layer
+            <em>plus all layers below it</em>. Amounts can only grow as you go up.
+            Example: 3/8 Sc at 3000 ft with 2/8 more Ac visible at 10 000 ft
+            becomes SCT030 BKN100.</li>
+          <li>Canadian METARs also carry a remarks group of cloud types with
+            per-layer amounts in octas (e.g. <code>SC3AC2</code>).
+            A thin veil can cover much of the sky while hiding little of it.
+            Ask how MANOBS wants amount and opacity handled.</li>
+          <li>When fog, snow, etc. at the surface hide the sky, the sky is
+            <em>obscured</em> and a vertical visibility is reported instead
+            of layers.</li>
+        </ul>
+
+        <h3>7. Field habits</h3>
+        <ul>
+          <li>Observe from a spot with as much open horizon as possible. Turn
+            all the way around, and look straight up too.</li>
+          <li>Estimate quadrant by quadrant, then check the total against your
+            first impression.</li>
+          <li>Treat the low sky with suspicion: packing, haze and distant
+            layers all make it look more covered.</li>
+          <li>At night, let your eyes adapt for several minutes. Use stars
+            (where they're missing) and lit cloud bases near towns to find
+            the cloud edges.</li>
+          <li>Never look at the sun. Block it with a building or your hand.</li>
+        </ul>
+
+        <h3>About this tool</h3>
+        <p class="help">
+          Coverage is computed on a 0.5° grid with true solid-angle weights,
+          so the numbers are exact to about 0.1%. In the Octas tab, every
+          deformation keeps the covered area fixed: the shape's outline is
+          the contour that encloses exactly the chosen area. The cloud-layer
+          model uses flat-topped cylinders on a jittered lattice, which is
+          simpler than real clouds but enough to show the geometry.
+        </p>
+      </section>
+    </aside>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
