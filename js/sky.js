@@ -141,21 +141,23 @@ function vertSliceAngles(azimuth) {
   return psi;
 }
 
-// Shape alone: horizontal slice ('slice'), vertical slice ('lying') or round
-// patch ('cap'). Field values are angles (radians), so a texture added on top
-// shifts the outline by a predictable amount.
+// Shape alone: slice ('lying', an orange lying on its side) or patch ('cap').
+// Both are placed by the same two angles: azimuth, the compass direction of
+// the horizon the cloud starts from, and elevation (0-180 deg), how far it has
+// climbed from there, over the zenith at 90 and down the far side. A slice
+// slides along that arc (elevation = its lower edge); a patch sits on it
+// (elevation = its centre). Field values are angles (radians), so a texture
+// added on top shifts the outline by a predictable amount.
 export function shapeField(params, out) {
-  const { shape, azimuth, centerElevation } = params;
-  const { az, x, y, z } = grid;
-  const a0 = azimuth * DEG;
-  if (shape === 'slice') {
-    for (let k = 0; k < N; k++) out[k] = -Math.abs(wrapPi(az[k] - a0));
-  } else if (shape === 'lying') {
-    const centre = vertSliceCentre(params.octas, params.sliceElevation);
-    const psi = vertSliceAngles(azimuth);
+  const { shape, azimuth, elevation } = params;
+  const { x, y, z } = grid;
+  if (shape === 'lying') {
+    const centre = vertSliceCentre(params.octas, elevation);
+    // the orange's axis lies along the horizon, square to the azimuth
+    const psi = vertSliceAngles(azimuth - 90);
     for (let k = 0; k < N; k++) out[k] = -Math.abs(psi[k] - centre);
   } else {
-    const e0 = centerElevation * DEG;
+    const [a0, e0] = patchCentre(azimuth, elevation);
     const cx = Math.sin(a0) * Math.cos(e0), cy = Math.cos(a0) * Math.cos(e0), cz = Math.sin(e0);
     for (let k = 0; k < N; k++) {
       const d = Math.max(-1, Math.min(1, x[k] * cx + y[k] * cy + z[k] * cz));
@@ -166,6 +168,13 @@ export function shapeField(params, out) {
   // value) so the threshold can split a column and hit the area exactly.
   for (let k = 0; k < N; k++) out[k] += 1e-6 * tieJitter[k];
   return out;
+}
+
+// A patch's centre (radians): past 90 deg of elevation it has crossed the
+// zenith and lies toward the opposite azimuth.
+export function patchCentre(azimuth, elevation) {
+  const over = elevation > 90;
+  return [((over ? azimuth + 180 : azimuth) % 360) * DEG, (over ? 180 - elevation : elevation) * DEG];
 }
 
 // A vertical slice's cloud is the band of slices centred on this turn angle,

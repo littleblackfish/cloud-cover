@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from '../vendor/OrbitControls.js';
 import {
   W, H, N, grid, computeField, solveThreshold, coverFromField, bandFractions,
-  reportedOctas, makeNoise3, mulberry32, OCTA_BAND_ELEVATIONS, vertSliceFrame, vertSliceCentre,
+  reportedOctas, makeNoise3, mulberry32, OCTA_BAND_ELEVATIONS, vertSliceFrame, vertSliceCentre, patchCentre,
 } from './sky.js';
 import { layerField, distanceToHeight, EARTH_R, P_OCC, ELEMENT_R } from './layer.js';
 
@@ -13,12 +13,12 @@ const $$ = (s) => [...document.querySelectorAll(s)];
 
 // ================================================================ state
 
-// shape: 'slice' (horizontal slice), 'lying' (vertical slice) or 'cap'
-// (round patch). form: one signed number for how the shape is broken up:
+// shape: 'lying' (slice) or 'cap' (patch), placed by azimuth and elevation
+// (see sky.js shapeField). form: one signed number for how the shape is broken up:
 // negative = cumuli, positive = strati, 0 = a plain shape; its size is the
 // strength. modifier and amount are derived from it (see setForm).
 const shapeParams = {
-  octas: 3, shape: 'slice', azimuth: 0, centerElevation: 90, sliceElevation: 0,
+  octas: 3, shape: 'lying', azimuth: 90, elevation: 25,
   form: 0.3, modifier: 'strati', amount: 0.3, time: 0, seed: 1, animate: true,
 };
 function setForm(p, v) {
@@ -30,7 +30,7 @@ function setForm(p, v) {
 // itself; size is the texture's scale in metres (element spacing or patch
 // size), typical for the étage.
 const layerParams = {
-  etage: 'low', shape: 'cap', azimuth: 0, centerElevation: 90, sliceElevation: 0, // round patch only
+  etage: 'low', shape: 'cap', azimuth: 0, elevation: 90, // a patch, overhead to start
   form: -2, modifier: 'cumuli', amount: 2, octas: 3,
   base: 4000 * FT, size: 1000, seed: 1, showClouds: true,
 };
@@ -569,8 +569,8 @@ function updatePattern() {
   U.modKind.value = { none: 0, cumuli: 1, strati: 2 }[p.modifier];
   U.seed.value = p.seed;
   U.shapeAz.value = p.azimuth * DEG;
-  U.sliceCentre.value = vertSliceCentre(layerOctasShown, p.sliceElevation);
-  const a = p.azimuth * DEG, e = p.centerElevation * DEG;
+  U.sliceCentre.value = vertSliceCentre(layerOctasShown, p.elevation);
+  const [a, e] = patchCentre(p.azimuth, p.elevation);
   U.capDir.value.set(Math.sin(a) * Math.cos(e), Math.cos(a) * Math.cos(e), Math.sin(e));
   U.texSize.value = p.size;
   U.amount.value = p.amount;
@@ -1060,15 +1060,8 @@ function bindRange(id, obj, key, fmt, after) {
   return { input, sync, set: (v) => { obj[key] = v; input.value = v; sync(); } };
 }
 
-const octasCtl = bindRange('octas', shapeParams, 'octas', (v) => (Number.isInteger(v) ? v : v.toFixed(2)), () => {
-  // dragging is already smooth: follow the slider directly
-  tweens.delete('octas');
-  octasShown = shapeParams.octas;
-  syncChips();
-});
 bindRange('azimuth', shapeParams, 'azimuth', (v) => `${v}°`);
-bindRange('centre', shapeParams, 'centerElevation', (v) => `${v}°`);
-bindRange('axis', shapeParams, 'sliceElevation', (v) => `${v}°`);
+bindRange('elevation', shapeParams, 'elevation', (v) => `${v}°`);
 // The Form slider: cumuli to the left, strati to the right, none in the
 // middle. Values near the middle snap to exactly zero, so it is easy to find.
 const fmtForm = (v) => (v < 0 ? `cumuli ${(-v).toFixed(2)}` : v > 0 ? `strati ${v.toFixed(2)}` : 'none');
@@ -1098,7 +1091,12 @@ const chips = $('#octa-chips');
 for (let k = 0; k <= 8; k++) {
   const b = document.createElement('button');
   b.textContent = k;
-  b.addEventListener('click', () => { octasCtl.set(k); syncChips(); easeOctasTo(k); });
+  b.addEventListener('click', () => {
+    shapeParams.octas = k;
+    $('#octas-out').textContent = k;
+    syncChips();
+    easeOctasTo(k);
+  });
   chips.append(b);
 }
 function syncChips() {
@@ -1107,16 +1105,12 @@ function syncChips() {
 syncChips();
 
 const shapeHelp = {
-  slice: 'Wedges from horizon to zenith. Each 45° of azimuth is exactly one octa.',
-  lying: 'The orange lies on its side. Each slice runs from the north horizon over the sky to the south horizon, a 180° arc. There are four slices on each side of the zenith, each one octa. Elevation slides the cloud up from the east horizon, over the zenith, toward the west. Azimuth turns the orange; the guides stay north–south.',
-  cap: 'A round patch. Move its centre down toward the horizon: the horizon clips it and it stretches to keep its area.',
+  lying: 'An orange lying on its side: each slice runs between two opposite horizon points, over the sky, and every eighth of the turn is one octa. The cloud rises from the horizon at the azimuth; elevation slides it up, over the zenith, and down the far side.',
+  cap: 'A round patch, centred at the azimuth and elevation (past 90° it has crossed the zenith). Lower it toward the horizon: the horizon clips it and it stretches to keep its area.',
 };
 function syncShape() {
   $$('#shape button').forEach((b) => b.classList.toggle('on', b.dataset.shape === shapeParams.shape));
   $('#shape-help').textContent = shapeHelp[shapeParams.shape];
-  const s = shapeParams.shape;
-  $('#f-centre').hidden = s !== 'cap';
-  $('#f-axis').hidden = s !== 'lying';
 }
 function setGuides(g) {
   guides = g;
@@ -1129,9 +1123,6 @@ $$('#shape button').forEach((b) => b.addEventListener('click', () => {
   startMorph();
   shapeParams.shape = b.dataset.shape;
   syncShape();
-  // show the matching slice outlines when switching between the two oranges
-  if (shapeParams.shape === 'lying' && guides === 'slices') setGuides('lying');
-  if (shapeParams.shape === 'slice' && guides === 'lying') setGuides('slices');
   dirty = true;
 }));
 syncShape();
@@ -1185,7 +1176,7 @@ function bindHeight(id, key) {
 const layerCtl = {
   base: bindHeight('lbase', 'base'),
   azimuth: bindRange('laz', layerParams, 'azimuth', (v) => `${v}°`),
-  centre: bindRange('lcentre', layerParams, 'centerElevation', (v) => `${v}°`),
+  centre: bindRange('lcentre', layerParams, 'elevation', (v) => `${v}°`),
 };
 // Form: switching between cumuli and strati happens at zero strength, so the
 // texture's size can change there unseen.
@@ -1311,14 +1302,13 @@ function newQuiz() {
   else if (n === 1) frac = 0.01 + rnd() * (1.5 / 8 - 0.01);
   else if (n === 7) frac = 6.5 / 8 + rnd() * (1.5 / 8 - 0.01);
   else frac = (n - 0.5 + rnd() * 0.999) / 8;
-  const shapes = ['slice', 'lying', 'cap'];
+  const shapes = ['lying', 'cap'];
   const mods = ['none', 'cumuli', 'cumuli', 'strati', 'strati'];
   quizParams = {
     octas: frac * 8,
     shape: shapes[Math.floor(rnd() * shapes.length)],
     azimuth: Math.floor(rnd() * 360),
-    centerElevation: 15 + rnd() * 75,
-    sliceElevation: rnd() * 180,
+    elevation: rnd() * 180,
     modifier: mods[Math.floor(rnd() * mods.length)],
     amount: 0.3 + rnd() * 0.9,
     form: 0, // unused by the quiz; modifier and amount are set directly

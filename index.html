@@ -44,41 +44,35 @@
       </header>
 
       <nav class="tabs" role="tablist">
-        <button role="tab" data-tab="octas" class="on">Octas</button>
+        <button role="tab" data-tab="octas" class="on">Celestial dome</button>
         <button role="tab" data-tab="layer">Cloud layer</button>
         <button role="tab" data-tab="quiz">Quiz</button>
       </nav>
 
       <!-- ===================================================== OCTAS -->
       <section class="tab" id="tab-octas">
-        <label class="field">
+        <div class="field">
           <span>Coverage <span><output id="octas-out">3</output> / 8</span></span>
-          <input type="range" id="octas" min="0" max="8" step="0.05" value="3">
-        </label>
-        <div class="chips" id="octa-chips"></div>
+          <div class="chips" id="octa-chips"></div>
+        </div>
 
         <fieldset class="field">
           <legend>Shape</legend>
           <div class="seg" id="shape">
-            <button data-shape="slice" class="on">Horizontal slice</button>
-            <button data-shape="lying">Vertical slice</button>
-            <button data-shape="cap">Round patch</button>
+            <button data-shape="lying" class="on">Slice</button>
+            <button data-shape="cap">Patch</button>
           </div>
           <p class="help" id="shape-help"></p>
         </fieldset>
 
         <div class="pair">
-          <label class="field" id="f-azimuth">
-            <span>Azimuth <output id="azimuth-out">0°</output></span>
-            <input type="range" id="azimuth" min="0" max="359" step="1" value="0">
+          <label class="field">
+            <span>Azimuth <output id="azimuth-out">90°</output></span>
+            <input type="range" id="azimuth" min="0" max="359" step="1" value="90">
           </label>
-          <label class="field" id="f-axis">
-            <span>Elevation <output id="axis-out">0°</output></span>
-            <input type="range" id="axis" min="0" max="180" step="1" value="0">
-          </label>
-          <label class="field" id="f-centre">
-            <span>Elevation <output id="centre-out">90°</output></span>
-            <input type="range" id="centre" min="0" max="90" step="1" value="90">
+          <label class="field">
+            <span>Elevation <output id="elevation-out">25°</output></span>
+            <input type="range" id="elevation" min="0" max="180" step="1" value="25">
           </label>
         </div>
         <label class="field form-slider">
@@ -101,19 +95,15 @@
 
       <!-- ===================================================== LAYER -->
       <section class="tab" id="tab-layer" hidden>
-        <p class="help">
-          One cloud layer, parallel to the ground, seen by the observer at the
-          centre. Everything is to scale: the observer's eye is 1.7 m up, and
-          the dome stands on their horizon, 4.65 km away, so the ground inside
-          it is all the ground they can see. Clouds sit at their real heights:
-          low ones inside the dome, higher ones above it. They are drawn out to
-          where the observer's line of sight, grazing the horizon, still
-          reaches them: about 130 km for a 4,000 ft layer. Everything follows
-          the Earth's curve. Cumuli or strati break the cloud up on the layer
-          itself, so perspective squeezes them toward the horizon. Each étage has its own
-          shade: low clouds greyest, high clouds nearly white. The view pulls
-          back as the layer rises.
-        </p>
+        <div class="field">
+          <span>Coverage <output id="lcover-out"></output></span>
+          <div class="chips" id="lcover-chips"></div>
+          <p class="help">
+            Octas as seen on the dome, held exactly as the layer changes
+            height or shape.
+          </p>
+        </div>
+
 
         <fieldset class="field">
           <legend>Étage</legend>
@@ -125,8 +115,8 @@
         </fieldset>
         <p class="help">
           The cloud is a round patch of the layer. Azimuth and elevation place
-          its centre in your sky; lower it and the patch becomes a long oval
-          far off.
+          its centre in your sky (past 90° it crosses the zenith); lower it
+          and the patch becomes a long oval far off.
         </p>
         <div class="pair">
           <label class="field">
@@ -135,7 +125,7 @@
           </label>
           <label class="field" id="f-lcentre">
             <span>Elevation <output id="lcentre-out">90°</output></span>
-            <input type="range" id="lcentre" min="0" max="90" step="1" value="90">
+            <input type="range" id="lcentre" min="0" max="180" step="1" value="90">
           </label>
         </div>
         <label class="field form-slider">
@@ -146,14 +136,6 @@
         </label>
         <datalist id="lform-centre"><option value="0"></option></datalist>
 
-        <div class="field">
-          <span>Coverage <output id="lcover-out"></output></span>
-          <div class="chips" id="lcover-chips"></div>
-          <p class="help">
-            Octas as seen on the dome, held exactly as the layer changes
-            height or shape.
-          </p>
-        </div>
         <div class="field units">
           <span>Heights in</span>
           <div class="seg" id="units">
@@ -170,6 +152,20 @@
           <button id="lreseed">Reshuffle</button>
         </div>
 
+
+        <p class="help">
+          One cloud layer, parallel to the ground, seen by the observer at the
+          centre. Everything is to scale: the observer's eye is 1.7 m up, and
+          the dome stands on their horizon, 4.65 km away, so the ground inside
+          it is all the ground they can see. Clouds sit at their real heights:
+          low ones inside the dome, higher ones above it. They are drawn out to
+          where the observer's line of sight, grazing the horizon, still
+          reaches them: about 130 km for a 4,000 ft layer. Everything follows
+          the Earth's curve. Cumuli or strati break the cloud up on the layer
+          itself, so perspective squeezes them toward the horizon. Each étage has its own
+          shade: low clouds greyest, high clouds nearly white. The view pulls
+          back as the layer rises.
+        </p>
 
         <h3>Where each octa of your sky is looking</h3>
         <p class="help">
