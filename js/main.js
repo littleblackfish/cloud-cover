@@ -651,10 +651,12 @@ const OUTSIDE = {
   layer: { target: new THREE.Vector3(0, 0.12, 0), out: 3.2, up: 0.05, fov: 55, heading: Math.atan2(-2.1, 2.4) },
 };
 // Outside the cloud layer the view is framed for a base up to about 4,500 ft
-// (0.3 dome radii); higher layers scale the whole framing up, so the clouds
-// stay in view.
-const layerViewScale = () => Math.max(1, (layerParams.base * K) / 0.3);
-let viewScaleShown = 1;
+// (0.3 dome radii); a higher étage scales the whole framing up, so its clouds
+// stay in view. The framing follows the étage's typical base, not the base
+// slider, so moving the base within an étage never moves the camera.
+const layerViewScale = () => Math.max(1, (ETAGE_BASE_FT[layerParams.etage] * FT * K) / 0.3);
+let viewScaleShown = 1; // the scale the camera is framed for
+let viewScaleWanted = 1; // eases to the new étage's scale
 // heading: compass azimuth (radians) the camera faces
 function cameraHeading() {
   const f = new THREE.Vector3();
@@ -707,6 +709,8 @@ function setView(v, { yaw, reset = false, instant = false } = {}) {
     const h = reset ? o.heading : heading;
     const sc = mode === 'layer' ? layerViewScale() : 1;
     viewScaleShown = sc;
+    viewScaleWanted = sc;
+    tweens.delete('viewScale');
     const target = o.target.clone().multiplyScalar(sc);
     // stand back from the target, opposite the way we face
     const pos = target.clone().add(new THREE.Vector3(-Math.sin(h) * o.out, o.up, Math.cos(h) * o.out).multiplyScalar(sc));
@@ -1037,9 +1041,9 @@ function frame(now) {
   }
   if (tweens.size || camFlying || baseTween) needsRender = true;
   if (!camFlying && view === 'outside' && mode === 'layer') {
-    // follow the cloud base: scale the view about the observer as it rises
-    // or falls, keeping the angle the user chose
-    const sc = layerViewScale();
+    // follow an étage change: scale the view about the observer, keeping the
+    // angle the user chose
+    const sc = viewScaleWanted;
     if (Math.abs(sc - viewScaleShown) > 1e-4) {
       const r = sc / viewScaleShown;
       const offset = camera.position.clone().sub(orbit.target).multiplyScalar(r);
@@ -1243,6 +1247,9 @@ $$('#etage button').forEach((b) => b.addEventListener('click', () => {
   // the layer glides to a typical base for the new étage; the octas stay
   const to = { base: ETAGE_BASE_FT[layerParams.etage] * FT };
   baseTween = { from: { base: layerParams.base }, to, start: performance.now(), duration: 1500 };
+  // the outside view reframes for the new étage alongside
+  const s0 = viewScaleWanted, s1 = layerViewScale();
+  animate('viewScale', 1500, (e) => { viewScaleWanted = s0 + (s1 - s0) * e; });
   syncLayerControls();
 }));
 syncLayerControls();
