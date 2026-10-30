@@ -536,7 +536,6 @@ const SURFACE_FRAG = `
   #include <logdepthbuf_pars_fragment>
   uniform vec3 color;
   uniform float metresPerUnit; // also the dome's radius in metres
-  uniform float planeVis; // how strongly the bare layer shows (0..1)
   varying vec2 vGround;
   ${LAYER_GLSL}
   void main() {
@@ -546,24 +545,16 @@ const SURFACE_FRAG = `
     vec3 s = normalize(vec3(vGround, layerHeight - d * d / 12742000.0));
     float r = region(s), rw = fwidth(r);
     float a = s.z < 0.0 ? 0.0 : layerCloud(r, rw, vGround, dFdx(vGround), dFdy(vGround));
-    // The layer itself is a faint plane; the cloud patch on it is solid.
-    // Full brightness inside the dome, dimming with distance beyond it.
+    // Only the cloud patch is drawn. Full brightness inside the dome,
+    // dimming with distance beyond it.
+    if (a < 0.01) discard;
     float far = smoothstep(1.0, 4.0, length(vec3(vGround, layerHeight)) / metresPerUnit);
-    // The bare layer: a faint fill and a grid, half the base height apart,
-    // so its flatness reads in perspective. Grid lines fade out where the
-    // cells shrink to a few pixels.
-    vec2 q = vGround / (0.5 * max(layerHeight, 100.0));
-    vec2 qw = max(fwidth(q), vec2(1e-5));
-    vec2 gd = abs(fract(q - 0.5) - 0.5) / qw;
-    float grid = (1.0 - min(min(gd.x, gd.y), 1.0)) * (1.0 - smoothstep(0.08, 0.3, max(qw.x, qw.y)));
-    float plane = planeVis * max(0.08, 0.5 * grid);
-    vec3 c = mix(vec3(0.70, 0.75, 0.82), color, a) * mix(1.0, 0.6, far);
-    gl_FragColor = vec4(c, mix(plane, mix(0.95, 0.75, far), a));
+    gl_FragColor = vec4(color * mix(1.0, 0.6, far), mix(0.95, 0.75, far) * a);
   }`;
 const layerSurface = new THREE.Mesh(
   new THREE.BufferGeometry(),
   new THREE.ShaderMaterial({
-    uniforms: { ...layerUniforms, metresPerUnit, planeVis: { value: 0.6 }, color: { value: new THREE.Color(0xeef1f5) } },
+    uniforms: { ...layerUniforms, metresPerUnit, color: { value: new THREE.Color(0xeef1f5) } },
     vertexShader: SURFACE_VERT,
     fragmentShader: SURFACE_FRAG,
     // seen from outside, one sample per pixel is enough (the dome uses four)
@@ -647,8 +638,9 @@ let camFlying = false;
 // camera sits, its field of view, and its default heading.
 const OUTSIDE = {
   octas: { target: new THREE.Vector3(0, 0.25, 0), out: 3.19, up: 1.25, fov: 45, heading: Math.atan2(-2.1, 2.4) },
-  // low, under the cloud layer, looking up at it past the dome
-  layer: { target: new THREE.Vector3(0, 0.12, 0), out: 3.2, up: 0.05, fov: 55, heading: Math.atan2(-2.1, 2.4) },
+  // the same view of the dome as the Celestial dome tab (scaled up for
+  // higher étages)
+  layer: { target: new THREE.Vector3(0, 0.25, 0), out: 3.19, up: 1.25, fov: 45, heading: Math.atan2(-2.1, 2.4) },
 };
 // Outside the cloud layer the view is framed for a base up to about 4,500 ft
 // (0.3 dome radii); a higher étage scales the whole framing up, so its clouds
@@ -734,14 +726,27 @@ function setView(v, { yaw, reset = false, instant = false } = {}) {
   // lines up with its projection on the dome, so the projection fades out.
   const a0 = domeUniforms.skyAlpha.value, a1 = v === 'inside' ? 0.62 : 0.2;
   const p0 = domeUniforms.projection.value, p1 = v === 'inside' ? 0 : 1;
-  // the bare layer is faint from outside, plainer from inside, under the sky
-  const planeU = layerSurface.material.uniforms.planeVis;
-  const q0 = planeU.value, q1 = v === 'inside' ? 1 : 0.6;
   animate('sky', ms, (e) => {
     domeUniforms.skyAlpha.value = a0 + (a1 - a0) * e;
     domeUniforms.projection.value = p0 + (p1 - p0) * e;
-    planeU.value = q0 + (q1 - q0) * e;
   });
+}
+
+// Switching tabs from outside: keep the direction the camera looks from, and
+// reframe it for the new scene's scale.
+function keepOutsideAngle() {
+  const dir = camera.position.clone().sub(orbit.target).normalize();
+  const o = OUTSIDE[mode === 'layer' ? 'layer' : 'octas'];
+  const sc = mode === 'layer' ? layerViewScale() : 1;
+  viewScaleShown = viewScaleWanted = sc;
+  tweens.delete('viewScale');
+  setOrbitLimits();
+  orbit.target.copy(o.target).multiplyScalar(sc);
+  camera.position.copy(orbit.target).addScaledVector(dir, Math.hypot(o.out, o.up) * sc);
+  camera.fov = o.fov;
+  camera.updateProjectionMatrix();
+  orbit.update(); // also applies the new limits (e.g. stay above the ground)
+  needsRender = true;
 }
 
 canvas.addEventListener('pointerdown', (ev) => {
@@ -1371,7 +1376,7 @@ $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
     morph = null;
     tweens.delete('octas');
     if (mode === 'quiz' && !quiz.answered) setView('inside', { instant: true });
-    else if (view === 'outside') setView('outside', { reset: true, instant: true });
+    else if (view === 'outside') keepOutsideAngle();
     recompute();
     needsRender = true;
     syncQuizLock();
