@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from '../vendor/OrbitControls.js';
 import {
-  W, H, N, grid, computeField, solveThreshold, coverFromField, bandFractions,
-  reportedOctas, makeNoise3, mulberry32, OCTA_BAND_ELEVATIONS, vertSliceFrame, vertSliceCentre, patchCentre,
+  W, H, N, grid, computeField, solveThreshold, coverFromField,
+  reportedOctas, makeNoise3, mulberry32, vertSliceFrame, vertSliceCentre, patchCentre,
 } from './sky.js';
-import { layerField, distanceToHeight, EARTH_R, P_OCC, ELEMENT_R } from './layer.js';
+import { layerField, EARTH_R, P_OCC, ELEMENT_R } from './layer.js';
 
 const DEG = Math.PI / 180;
 const FT = 0.3048; // metres per foot
@@ -30,9 +30,9 @@ function setForm(p, v) {
 // itself; size is the texture's scale in metres (element spacing or patch
 // size), typical for the étage.
 const layerParams = {
-  etage: 'low', shape: 'cap', azimuth: 0, elevation: 90, // a patch, overhead to start
-  form: -2, modifier: 'cumuli', amount: 2, octas: 3,
-  base: 4000 * FT, size: 1000, seed: 1, showClouds: true,
+  etage: 'low', shape: 'cap', azimuth: 90, elevation: 25, // round patch only
+  form: 0.3, modifier: 'strati', amount: 0.3, octas: 3,
+  base: 4000 * FT, size: 2000, seed: 1, showClouds: true,
 };
 let quizParams = null;
 const quiz = { answered: false, right: 0, total: 0, streak: 0 };
@@ -898,22 +898,6 @@ function updateReadout() {
   }
 }
 
-function updateLayerPanel() {
-  const bands = bandFractions(cover);
-  const rows = [];
-  for (let b = 7; b >= 0; b--) {
-    const e0 = OCTA_BAND_ELEVATIONS[b], e1 = OCTA_BAND_ELEVATIONS[b + 1];
-    const dNear = distanceToHeight(e1 * DEG, layerParams.base);
-    const dFar = distanceToHeight(e0 * DEG, layerParams.base);
-    const pct = bands[b] * 100;
-    rows.push(`<tr><td>${e0.toFixed(0)}°–${e1.toFixed(0)}°</td>
-      <td>${b === 7 ? '0' : fmtKm(dNear)} – ${fmtKm(dFar)}</td>
-      <td><div class="bar-row"><div class="bar" title="${pct.toFixed(0)}% of this band covered">
-        <i style="width:${pct}%"></i></div>
-        <span>${pct.toFixed(0)}%</span></div></td></tr>`);
-  }
-  $('#layer-bands tbody').innerHTML = rows.join('');
-}
 
 // ================================================================ update loop
 
@@ -964,7 +948,6 @@ function recompute() {
     coveredFrac = coverFromField(field, layerThreshold, cover);
     paintDome(false);
     updateCloudMeshes();
-    updateLayerPanel();
   } else {
     const p = mode === 'quiz' ? quizParams : shapeParams;
     computeField({ ...p, noise: noiseFor(p.seed) }, field);
@@ -1060,8 +1043,10 @@ function bindRange(id, obj, key, fmt, after) {
   return { input, sync, set: (v) => { obj[key] = v; input.value = v; sync(); } };
 }
 
-bindRange('azimuth', shapeParams, 'azimuth', (v) => `${v}°`);
-bindRange('elevation', shapeParams, 'elevation', (v) => `${v}°`);
+const domeCtl = {
+  azimuth: bindRange('azimuth', shapeParams, 'azimuth', (v) => `${v}°`),
+  elevation: bindRange('elevation', shapeParams, 'elevation', (v) => `${v}°`),
+};
 // The Form slider: cumuli to the left, strati to the right, none in the
 // middle. Values near the middle snap to exactly zero, so it is easy to find.
 const fmtForm = (v) => (v < 0 ? `cumuli ${(-v).toFixed(2)}` : v > 0 ? `strati ${v.toFixed(2)}` : 'none');
@@ -1085,7 +1070,7 @@ function bindForm(id, p, after) {
   show();
   return { input, set: (v) => { setForm(p, v); show(); } };
 }
-bindForm('form', shapeParams);
+domeCtl.form = bindForm('form', shapeParams);
 
 const chips = $('#octa-chips');
 for (let k = 0; k <= 8; k++) {
@@ -1368,6 +1353,19 @@ $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
   let next = mode;
   if (tab === 'octas' || tab === 'layer' || tab === 'quiz') next = tab;
   if (next === prev) return;
+  // Azimuth, elevation and form are shared by the Celestial dome and Cloud
+  // layer tabs: carry them over (no cumuli in the high étage).
+  if (next === 'layer') {
+    layerCtl.azimuth.set(shapeParams.azimuth);
+    layerCtl.centre.set(shapeParams.elevation);
+    layerCtl.form.set(layerParams.etage === 'high' ? Math.max(0, shapeParams.form) : shapeParams.form);
+    layerParams.size = TEX_SIZE[layerParams.etage][layerParams.modifier];
+    syncLayerControls();
+  } else if (next === 'octas' && prev === 'layer') {
+    domeCtl.azimuth.set(layerParams.azimuth);
+    domeCtl.elevation.set(layerParams.elevation);
+    domeCtl.form.set(layerParams.form);
+  }
   if ((prev === 'layer') === (next === 'layer')) {
     // octas <-> quiz: same scene, so the sky morphs from one to the other
     startMorph();
