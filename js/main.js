@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from '../vendor/OrbitControls.js';
 import {
   W, H, N, grid, computeField, solveThreshold, coverFromField, bandFractions,
-  reportedOctas, makeNoise3, mulberry32, OCTA_BAND_ELEVATIONS,
+  reportedOctas, makeNoise3, mulberry32, OCTA_BAND_ELEVATIONS, vertSliceFrame, vertSliceBoundaries,
 } from './sky.js';
 import { castLayer, nearbyClouds, sheetGeometry, distanceToHeight } from './layer.js';
 
@@ -14,12 +14,12 @@ const $$ = (s) => [...document.querySelectorAll(s)];
 // ================================================================ state
 
 const shapeParams = {
-  octas: 3, shape: 'slice', azimuth: 0, centerElevation: 90, clumps: 6,
+  octas: 3, shape: 'slice', azimuth: 0, centerElevation: 90, axisElevation: 0, clumps: 6,
   deform: 0, scale: 3, time: 0, seed: 1, animate: false,
 };
 const layerParams = {
   etage: 'low', form: 'cumuliform',
-  cover: 0.3, base: 4000 * FT, thickness: 3000 * FT, size: 900, extent: 400,
+  cover: 3 / 8, base: 4000 * FT, thickness: 3000 * FT, size: 900, extent: 400,
   curved: true, seed: 1, showClouds: true,
 };
 let quizParams = null;
@@ -159,34 +159,30 @@ scene.add(circleLine(0, 1.001, 0xaec6e0, 0.9));
 
 const guideGroup = new THREE.Group();
 scene.add(guideGroup);
-// Half great circles from one end of a horizontal axis (azimuth a0, degrees)
-// to the other, tilted every 22.5 deg: the lying orange's slice boundaries.
-// Points are [east, north, up].
-function lyingArcs(a0) {
-  const a = a0 * DEG;
-  const ax = [Math.sin(a), Math.cos(a), 0];
-  const px = [Math.cos(a), -Math.sin(a), 0];
+// Vert-slice boundaries: half great circles from one end of the slicing axis
+// to the other, cut at the horizon. Points are [east, north, up].
+function lyingArcs(a0, e0) {
+  const { u, p, q } = vertSliceFrame(a0, e0);
   const arcs = [];
-  for (let k = 1; k < 8; k++) {
-    const tilt = k * 22.5 * DEG;
-    const pts = [];
-    for (let i = 0; i <= 96; i++) {
-      const t = (i / 96) * Math.PI;
-      const c = Math.cos(t), sn = Math.sin(t);
-      pts.push([
-        ax[0] * c + px[0] * Math.cos(tilt) * sn,
-        ax[1] * c + px[1] * Math.cos(tilt) * sn,
-        Math.sin(tilt) * sn,
-      ]);
+  for (const psi of vertSliceBoundaries(a0, e0)) {
+    // half-plane direction at angle psi, counted from -q
+    const phi = psi - Math.PI / 2;
+    const w = [0, 1, 2].map((i) => p[i] * Math.cos(phi) + q[i] * Math.sin(phi));
+    let pts = [];
+    for (let i = 0; i <= 120; i++) {
+      const t = (i / 120) * Math.PI;
+      const d = [0, 1, 2].map((j) => u[j] * Math.cos(t) + w[j] * Math.sin(t));
+      if (d[2] >= -1e-6) pts.push([d[0], d[1], Math.max(0, d[2])]);
+      else if (pts.length) { if (pts.length > 1) arcs.push(pts); pts = []; }
     }
-    arcs.push(pts);
+    if (pts.length > 1) arcs.push(pts);
   }
   return arcs;
 }
 function guideSpec(g) {
   if (g === 'quadrants') return { circles: [30, 60], meridians: [0, 90, 180, 270], arcs: [] };
   if (g === 'slices') return { circles: [], meridians: [0, 45, 90, 135, 180, 225, 270, 315], arcs: [] };
-  if (g === 'lying') return { circles: [], meridians: [], arcs: lyingArcs(shapeParams.azimuth) };
+  if (g === 'lying') return { circles: [], meridians: [], arcs: lyingArcs(shapeParams.azimuth, shapeParams.axisElevation) };
   if (g === 'bands') return { circles: OCTA_BAND_ELEVATIONS.slice(1, 8), meridians: [], arcs: [] };
   return { circles: [], meridians: [], arcs: [] };
 }
@@ -330,8 +326,9 @@ cloudMesh.renderOrder = 1;
 scene.add(cloudMesh);
 
 // Stratiform sheet, drawn as its base and top surfaces with the same holes.
+const SHEET_PX = 768;
 const sheetCanvas = document.createElement('canvas');
-sheetCanvas.width = sheetCanvas.height = 512;
+sheetCanvas.width = sheetCanvas.height = SHEET_PX;
 const sheetTexture = new THREE.CanvasTexture(sheetCanvas);
 sheetTexture.colorSpace = THREE.SRGBColorSpace;
 const sheetMeshes = [0xd9dee5, 0xf6f7f9].map((color) => {
@@ -346,29 +343,39 @@ const sheetMeshes = [0xd9dee5, 0xf6f7f9].map((color) => {
   return m;
 });
 
+// The sheet texture covers the dome's whole footprint, so it only needs
+// redrawing when the pattern changes, not when the layer moves up or down.
+let sheetKey = '';
 function drawSheet() {
-  const { base, thickness } = layerParams;
+  const { base, thickness, cover, size, seed } = layerParams;
+  const key = `${cover}|${size}|${seed}`;
+  if (key !== sheetKey) {
+    sheetKey = key;
+    const { field, T } = sheetGeometry(layerParams);
+    const g = sheetCanvas.getContext('2d');
+    const img = g.createImageData(SHEET_PX, SHEET_PX);
+    const edge = 0.04;
+    for (let py = 0; py < SHEET_PX; py++) {
+      const north = (1 - ((py + 0.5) / SHEET_PX) * 2) * SCENE_M;
+      for (let px = 0; px < SHEET_PX; px++) {
+        const east = (((px + 0.5) / SHEET_PX) * 2 - 1) * SCENE_M;
+        let a = (field(east, north) - T) / edge + 0.5;
+        a = a < 0 ? 0 : a > 1 ? 1 : a;
+        const o = (py * SHEET_PX + px) * 4;
+        img.data[o] = img.data[o + 1] = img.data[o + 2] = 255;
+        img.data[o + 3] = 235 * a;
+      }
+    }
+    g.putImageData(img, 0, 0);
+    sheetTexture.needsUpdate = true;
+  }
   const yb = base * K, yt = (base + thickness) * K;
   const rr = Math.sqrt(Math.max(0, 1 - yb * yb)) * 0.995;
-  const { field, T } = sheetGeometry(layerParams);
-  const g = sheetCanvas.getContext('2d');
-  const img = g.createImageData(512, 512);
-  const edge = 0.04;
-  for (let py = 0; py < 512; py++) {
-    const north = (1 - ((py + 0.5) / 512) * 2) * rr / K;
-    for (let px = 0; px < 512; px++) {
-      const east = (((px + 0.5) / 512) * 2 - 1) * rr / K;
-      let a = (field(east, north) - T) / edge + 0.5;
-      a = a < 0 ? 0 : a > 1 ? 1 : a;
-      const o = (py * 512 + px) * 4;
-      img.data[o] = img.data[o + 1] = img.data[o + 2] = 255;
-      img.data[o + 3] = 235 * a;
-    }
-  }
-  g.putImageData(img, 0, 0);
-  sheetTexture.needsUpdate = true;
-  // both surfaces share one texture, so they use the base's radius; the top
-  // is only drawn while that disc still fits inside the dome
+  // show the part of the texture under a disc of radius rr
+  sheetTexture.repeat.set(rr, rr);
+  sheetTexture.offset.set(0.5 - rr / 2, 0.5 - rr / 2);
+  // both surfaces share the base's radius; the top is only drawn while that
+  // disc still fits inside the dome
   sheetMeshes.forEach((m, i) => {
     const y = i === 0 ? yb : yt;
     m.scale.set(rr, rr, 1);
@@ -658,7 +665,7 @@ function updateLayerPanel() {
 
 function recompute() {
   if (mode === 'layer') {
-    layerGeo = castLayer(layerParams, cover);
+    layerGeo = castLayer({ ...layerParams, quick: !!baseTween }, cover);
     let s = 0;
     for (let k = 0; k < N; k++) s += cover[k] * grid.weight[k];
     coveredFrac = s;
@@ -677,12 +684,23 @@ function recompute() {
   updateReadout();
 }
 
+// Smooth move of the cloud base when the étage changes.
+let baseTween = null;
+
 let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (mode === 'octas' && shapeParams.animate) {
     shapeParams.time += dt * 0.6;
+    dirty = true;
+  }
+  if (baseTween) {
+    const t = Math.min(1, (now - baseTween.start) / baseTween.duration);
+    const ease = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+    layerParams.base = baseTween.from + (baseTween.to - baseTween.from) * ease;
+    if (t >= 1) baseTween = null;
+    layerCtl.base.sync();
     dirty = true;
   }
   if (dirty) {
@@ -717,6 +735,9 @@ bindRange('azimuth', shapeParams, 'azimuth', (v) => `${v}°`, () => {
   if (guides === 'lying') buildGuides();
 });
 bindRange('centre', shapeParams, 'centerElevation', (v) => `${v}°`);
+bindRange('axis', shapeParams, 'axisElevation', (v) => `${v}°`, () => {
+  if (guides === 'lying') buildGuides();
+});
 bindRange('clumps', shapeParams, 'clumps', (v) => v);
 bindRange('deform', shapeParams, 'deform', (v) => (v === 0 ? 'none' : v.toFixed(2)));
 bindRange('scale', shapeParams, 'scale', (v) => (v < 2.5 ? 'large' : v < 5 ? 'medium' : 'small'));
@@ -735,7 +756,7 @@ syncChips();
 
 const shapeHelp = {
   slice: 'Wedges from horizon to zenith. Each 45° of azimuth is exactly one octa.',
-  lying: 'The orange lies on its side. Each slice runs from the north horizon over the sky to the south horizon, a 180° arc. There are four slices on each side of the zenith, each one octa, filling from the east horizon. Direction turns the orange.',
+  lying: 'The orange lies on its side. Each slice runs from the north horizon over the sky to the south horizon, a 180° arc. There are four slices on each side of the zenith, each one octa, filling from the east horizon. Direction turns the orange; axis elevation tips it up until, at 90°, it becomes the ordinary slice.',
   cap: 'A round patch. Move its centre down toward the horizon: the horizon clips it and it stretches to keep its area.',
   band: 'Cloud rising from the horizon all round. 4/8 only reaches 30° elevation.',
   clumps: 'Several round clouds of mixed sizes. Change the count: the total area stays the same.',
@@ -747,6 +768,7 @@ function syncShape() {
   const s = shapeParams.shape;
   $('#f-azimuth').hidden = !(s === 'slice' || s === 'lying' || s === 'cap');
   $('#f-centre').hidden = s !== 'cap';
+  $('#f-axis').hidden = s !== 'lying';
   $('#f-clumps').hidden = s !== 'clumps';
   $('#f-deform').hidden = s === 'patchy';
 }
@@ -814,12 +836,34 @@ function bindHeight(id, key) {
 }
 
 const layerCtl = {
-  cover: bindRange('lcover', layerParams, 'cover', (v) => `${(v * 8).toFixed(1)}/8`),
   base: bindHeight('lbase', 'base'),
   thickness: bindHeight('lthick', 'thickness'),
   size: bindRange('lsize', layerParams, 'size', fmtKm),
   extent: bindRange('lext', layerParams, 'extent', (v) => `${v} km`),
 };
+
+// Map-view coverage, in whole octas.
+const lchips = $('#lcover-chips');
+for (let k = 0; k <= 8; k++) {
+  const b = document.createElement('button');
+  b.textContent = k;
+  b.addEventListener('click', () => {
+    layerParams.cover = k / 8;
+    syncLayerChips();
+    dirty = true;
+  });
+  lchips.append(b);
+}
+function syncLayerChips() {
+  const cumuliform = layerParams.form === 'cumuliform';
+  [...lchips.children].forEach((b, k) => {
+    b.classList.toggle('on', Math.round(layerParams.cover * 8) === k);
+    // separate elements can't close every gap: a full layer is a sheet
+    b.disabled = cumuliform && k === 8;
+    b.title = b.disabled ? 'A fully covered layer is a sheet: choose Stratiform' : '';
+  });
+  $('#lcover-out').textContent = `${Math.round(layerParams.cover * 8)}/8`;
+}
 $$('#units button').forEach((b) => b.addEventListener('click', () => {
   heightUnit = b.dataset.units;
   $$('#units button').forEach((x) => x.classList.toggle('on', x === b));
@@ -830,19 +874,19 @@ $('#lcurve').addEventListener('change', (e) => { layerParams.curved = e.target.c
 $('#lshow').addEventListener('change', (e) => { layerParams.showClouds = e.target.checked; dirty = true; });
 $('#lreseed').addEventListener('click', () => { layerParams.seed = 1 + Math.floor(Math.random() * 1e6); dirty = true; });
 
-// Typical starting layer for each étage and form (heights in ft, size in m).
+// Typical layer for each étage and form (heights in ft, size in m).
 const LAYER_DEFAULTS = {
   low: {
-    cumuliform: { cover: 0.3, base: 4000, thickness: 3000, size: 900 },
-    stratiform: { cover: 0.6, base: 1500, thickness: 800, size: 1500 },
+    cumuliform: { base: 4000, thickness: 3000, size: 900 },
+    stratiform: { base: 1500, thickness: 800, size: 1500 },
   },
   mid: {
-    cumuliform: { cover: 0.4, base: 12000, thickness: 600, size: 600 },
-    stratiform: { cover: 0.8, base: 10000, thickness: 4000, size: 8000 },
+    cumuliform: { base: 12000, thickness: 600, size: 600 },
+    stratiform: { base: 10000, thickness: 4000, size: 8000 },
   },
   high: {
-    cumuliform: { cover: 0.3, base: 25000, thickness: 200, size: 300 },
-    stratiform: { cover: 0.7, base: 28000, thickness: 1500, size: 10000 },
+    cumuliform: { base: 25000, thickness: 200, size: 300 },
+    stratiform: { base: 28000, thickness: 1500, size: 10000 },
   },
 };
 const GENUS = {
@@ -860,31 +904,40 @@ const GENUS = {
   },
 };
 
-function applyLayerDefaults() {
+// Étage or form changed. Coverage is kept; a new étage moves the same layer
+// smoothly to a typical base there, and a new form loads typical thickness
+// and element size.
+function syncLayerForm() {
   const { etage, form } = layerParams;
-  const d = LAYER_DEFAULTS[etage][form];
   $$('#etage button').forEach((b) => b.classList.toggle('on', b.dataset.etage === etage));
   $$('#form button').forEach((b) => b.classList.toggle('on', b.dataset.form === form));
   $('#genus').textContent = `Typical: ${GENUS[etage][form]}`;
   $('#lsize-label').textContent = form === 'stratiform' ? 'Size of patches and gaps' : 'Cloud diameter';
   const [smin, smax, sstep] = SIZE_M[form];
   Object.assign(layerCtl.size.input, { min: smin, max: smax, step: sstep });
-  layerCtl.cover.input.max = MAX_COVER[form];
-  layerCtl.cover.set(d.cover);
-  layerCtl.base.set(d.base * FT);
-  layerCtl.thickness.set(d.thickness * FT);
-  layerCtl.size.set(d.size);
+  if (form === 'cumuliform' && layerParams.cover > 7 / 8) layerParams.cover = 7 / 8;
+  syncLayerChips();
   dirty = true;
 }
+function applyFormDefaults() {
+  const d = LAYER_DEFAULTS[layerParams.etage][layerParams.form];
+  layerCtl.thickness.set(d.thickness * FT);
+  layerCtl.size.set(d.size);
+  syncLayerForm();
+}
 $$('#etage button').forEach((b) => b.addEventListener('click', () => {
+  if (b.dataset.etage === layerParams.etage) return;
   layerParams.etage = b.dataset.etage;
-  applyLayerDefaults();
+  const to = LAYER_DEFAULTS[layerParams.etage][layerParams.form].base * FT;
+  baseTween = { from: layerParams.base, to, start: performance.now(), duration: 1500 };
+  syncLayerForm();
 }));
 $$('#form button').forEach((b) => b.addEventListener('click', () => {
+  if (b.dataset.form === layerParams.form) return;
   layerParams.form = b.dataset.form;
-  applyLayerDefaults();
+  applyFormDefaults();
 }));
-applyLayerDefaults();
+applyFormDefaults();
 
 // ---------------------------------------------------------------- quiz
 
@@ -912,6 +965,7 @@ function newQuiz() {
     shape: shapes[Math.floor(rnd() * shapes.length)],
     azimuth: Math.floor(rnd() * 360),
     centerElevation: 15 + rnd() * 75,
+    axisElevation: 0,
     clumps: 2 + Math.floor(rnd() * 12),
     deform: 0.15 + rnd() * 0.6,
     scale: 2 + rnd() * 4,

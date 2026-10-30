@@ -221,3 +221,4 @@ code { font-size: 12.5px; background: var(--chip); padding: 1px 4px; border-radi
 .field.units { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .field.units > span { margin: 0; }
 .seg button small { display: block; font-size: 11px; opacity: .8; }
+.chips button:disabled { opacity: .4; cursor: not-allowed; }

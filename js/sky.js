@@ -112,6 +112,61 @@ const wrapPi = (a) => {
   return a - Math.PI;
 };
 
+// ---------------------------------------------------------------- vert slices
+//
+// An orange whose axis points toward azimuth a0 at elevation e0. Its slices
+// are bounded by half great circles from one end of the axis to the other.
+// With the axis on the horizon (e0 = 0) each such arc runs 180 degrees across
+// the sky, the dome holds 180 degrees of slice, and every 22.5 degrees is
+// exactly one octa: four slices each side of the zenith. With e0 = 90 the
+// axis is vertical and they become the ordinary horizon-to-zenith slices.
+
+export function vertSliceFrame(azimuth, axisElevation) {
+  const a = azimuth * DEG, e = axisElevation * DEG;
+  const u = [Math.sin(a) * Math.cos(e), Math.cos(a) * Math.cos(e), Math.sin(e)];
+  // p: horizontal, square to the axis (east when the axis points north)
+  const p = [Math.cos(a), -Math.sin(a), 0];
+  // q = p x u: "up" side of the axis
+  const q = [p[1] * u[2] - p[2] * u[1], p[2] * u[0] - p[0] * u[2], p[0] * u[1] - p[1] * u[0]];
+  return { u, p, q };
+}
+
+// Angle of each grid direction around the axis, in [0, 2pi), counted from the
+// half-plane pointing straight "down" (-q), so filling starts at the horizon.
+function vertSliceAngles(azimuth, axisElevation) {
+  const { p, q } = vertSliceFrame(azimuth, axisElevation);
+  const { x, y, z } = grid;
+  const psi = new Float32Array(N);
+  for (let k = 0; k < N; k++) {
+    const dp = x[k] * p[0] + y[k] * p[1] + z[k] * p[2];
+    const dq = x[k] * q[0] + y[k] * q[1] + z[k] * q[2];
+    let v = Math.atan2(dq, dp) + Math.PI / 2;
+    if (v < 0) v += 2 * Math.PI;
+    psi[k] = v;
+  }
+  return psi;
+}
+
+// Angles (from vertSliceAngles' origin) of the boundaries that split the dome
+// into eight equal-area slices. With a tilted axis the slices are no longer
+// equal in angle, so the boundaries are found from the grid's area weights.
+export function vertSliceBoundaries(azimuth, axisElevation) {
+  const psi = vertSliceAngles(azimuth, axisElevation);
+  const B = 4096;
+  const hist = new Float64Array(B);
+  for (let k = 0; k < N; k++) hist[Math.min(B - 1, Math.floor((psi[k] / (2 * Math.PI)) * B))] += grid.weight[k];
+  const out = [];
+  let acc = 0, next = 1;
+  for (let b = 0; b < B && next < 8; b++) {
+    acc += hist[b];
+    while (next < 8 && acc >= next / 8) {
+      out.push(((b + 1) / B) * 2 * Math.PI);
+      next++;
+    }
+  }
+  return [0, ...out];
+}
+
 export function computeField(params, out) {
   const { shape, azimuth, centerElevation, clumps, deform, scale, time, seed } = params;
   const { az, el, x, y, z } = grid;
@@ -120,13 +175,8 @@ export function computeField(params, out) {
   if (shape === 'slice') {
     for (let k = 0; k < N; k++) out[k] = -Math.abs(wrapPi(az[k] - a0));
   } else if (shape === 'lying') {
-    // An orange lying on its side, its axis along the horizon toward azimuth
-    // a0. Every slice is a lune bounded by two half great circles running from
-    // one end of the axis, over the sky, to the other (180 degree arcs). The
-    // dome holds 180 degrees of lune, so each 22.5 degrees is one octa: four
-    // slices on each side of the zenith. Cloud fills from the horizon at a0+90.
-    const px = Math.cos(a0), py = -Math.sin(a0);
-    for (let k = 0; k < N; k++) out[k] = -Math.atan2(z[k], x[k] * px + y[k] * py);
+    const psi = vertSliceAngles(azimuth, params.axisElevation);
+    for (let k = 0; k < N; k++) out[k] = -psi[k];
   } else if (shape === 'cap') {
     const e0 = centerElevation * DEG;
     const cx = Math.sin(a0) * Math.cos(e0), cy = Math.cos(a0) * Math.cos(e0), cz = Math.sin(e0);

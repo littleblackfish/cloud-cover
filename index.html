@@ -57,8 +57,8 @@
         <fieldset class="field">
           <legend>Starting shape</legend>
           <div class="seg" id="shape">
-            <button data-shape="slice" class="on">Orange slice</button>
-            <button data-shape="lying">Lying orange</button>
+            <button data-shape="slice" class="on">Slice</button>
+            <button data-shape="lying">Vert slice</button>
             <button data-shape="cap">Round patch</button>
             <button data-shape="band">Horizon ring</button>
             <button data-shape="clumps">Clumps</button>
@@ -70,6 +70,10 @@
         <label class="field" id="f-azimuth">
           <span>Direction (azimuth) <output id="azimuth-out">0°</output></span>
           <input type="range" id="azimuth" min="0" max="359" step="1" value="0">
+        </label>
+        <label class="field" id="f-axis">
+          <span>Axis elevation <output id="axis-out">0°</output></span>
+          <input type="range" id="axis" min="0" max="90" step="1" value="0">
         </label>
         <label class="field" id="f-centre">
           <span>Patch centre elevation <output id="centre-out">90°</output></span>
@@ -102,7 +106,7 @@
             <button data-guides="none">None</button>
             <button data-guides="quadrants" class="on">Quadrants + 30°/60°</button>
             <button data-guides="slices">8 slices</button>
-            <button data-guides="lying">8 lying slices</button>
+            <button data-guides="lying">8 vert slices</button>
             <button data-guides="bands">8 equal bands</button>
           </div>
         </fieldset>
@@ -142,10 +146,10 @@
           <p class="help" id="genus"></p>
         </fieldset>
 
-        <label class="field">
+        <div class="field">
           <span>Real coverage, map view <output id="lcover-out"></output></span>
-          <input type="range" id="lcover" min="0.02" max="0.9" step="0.01" value="0.3">
-        </label>
+          <div class="chips" id="lcover-chips"></div>
+        </div>
         <div class="field units">
           <span>Heights in</span>
           <div class="seg" id="units">
@@ -265,7 +269,7 @@
           The dome still splits into eight equal slices, four on each side of
           the zenith. The slices next to the horizon look thin, and the ones
           overhead look wide, but every one is an octa. Try
-          <em>Lying orange</em> with the <em>8 lying slices</em> guides.
+          <em>Vert slice</em> with the <em>8 vert slices</em> guides.
         </p>
 
         <h3>4. Your eye squashes the dome</h3>

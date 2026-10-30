@@ -101,7 +101,13 @@ export function cloudAt(ix, iy, geo) {
   return { x: (ix + jx) * geo.s, y: (iy + jy) * geo.s };
 }
 
+// `params.quick` casts one ray per grid cell instead of four (used while the
+// layer is being animated).
 export function castLayer(params, cover) {
+  if (params.cover <= 0) {
+    cover.fill(0);
+    return { planCover: 0 };
+  }
   return params.form === 'stratiform' ? castSheet(params, cover) : castElements(params, cover);
 }
 
@@ -156,7 +162,7 @@ function castElements(params, cover) {
   };
 
   // 2 x 2 rays per grid cell, so cover holds fractions 0, .25, ... 1
-  const SS = 2;
+  const SS = params.quick ? 1 : 2;
   cover.fill(0);
   for (let j = 0; j < H; j++) {
     for (let sj = 0; sj < SS; sj++) {
@@ -210,7 +216,7 @@ function castSheet(params, cover) {
   const top = base + thickness;
   const maxD = extent * 1000;
   const step = params.size / 3;
-  const SS = 2;
+  const SS = params.quick ? 1 : 2;
   cover.fill(0);
   for (let j = 0; j < H; j++) {
     for (let sj = 0; sj < SS; sj++) {
@@ -244,6 +250,7 @@ function castSheet(params, cover) {
 // Cloud elements close enough to draw inside a unit dome, nearest first.
 // `k` is scene units per metre.
 export function nearbyClouds(params, k, limit) {
+  if (params.cover <= 0) return [];
   const geo = layerGeometry(params);
   const base = params.base * k;
   const top = (params.base + params.thickness) * k;
