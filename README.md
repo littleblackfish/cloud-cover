@@ -8,8 +8,8 @@ and is hosted on GitHub Pages without a build step.
 
 - **Octas tab:** shows the dome with 0–8 octas of cloud as a slice (an
   orange cut from horizon to zenith), a vert slice (the orange on its side:
-  180° slices from the north horizon to the south, with an adjustable axis
-  elevation), a round patch, a horizon ring, clumps or random patches. The *Deform*
+  180° slices from the north horizon to the south, sliding up from one
+  horizon, over the zenith, to the other), a round patch, a horizon ring, clumps or random patches. The *Deform*
   controls change the outline while the covered area stays exactly fixed.
 - **Outside / Inside views:** orbit the translucent dome from outside, or
   stand at the observer's position and look around.

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from '../vendor/OrbitControls.js';
 import {
   W, H, N, grid, computeField, solveThreshold, coverFromField, bandFractions,
-  reportedOctas, makeNoise3, mulberry32, OCTA_BAND_ELEVATIONS, vertSliceFrame, vertSliceBoundaries,
+  reportedOctas, makeNoise3, mulberry32, OCTA_BAND_ELEVATIONS, vertSliceFrame,
 } from './sky.js';
 import {
   castLayer, layerGeometry, sheetField, sheetGeometry, solvePlanCover, distanceToHeight, EARTH_R,
@@ -16,7 +16,7 @@ const $$ = (s) => [...document.querySelectorAll(s)];
 // ================================================================ state
 
 const shapeParams = {
-  octas: 3, shape: 'slice', azimuth: 0, centerElevation: 90, axisElevation: 0, clumps: 6,
+  octas: 3, shape: 'slice', azimuth: 0, centerElevation: 90, sliceElevation: 0, clumps: 6,
   deform: 0, scale: 3, time: 0, seed: 1, animate: false,
 };
 const layerParams = {
@@ -288,7 +288,7 @@ dome.renderOrder = 2;
 scene.add(dome);
 
 const ground = new THREE.Mesh(
-  new THREE.CircleGeometry(1.6, 96),
+  new THREE.CircleGeometry(8, 128),
   new THREE.MeshBasicMaterial({ color: 0x33402f }),
 );
 ground.rotation.x = -Math.PI / 2;
@@ -318,28 +318,27 @@ scene.add(guideGroup);
 let fadingGuides = null;
 // Vert-slice boundaries: half great circles from one end of the slicing axis
 // to the other, cut at the horizon. Points are [east, north, up].
-function lyingArcs(a0, e0) {
-  const { u, p, q } = vertSliceFrame(a0, e0);
+// Vert-slice boundaries: half great circles from one end of the axis, over
+// the sky, to the other, every 22.5 degrees. Points are [east, north, up].
+function lyingArcs(a0) {
+  const { u, p, q } = vertSliceFrame(a0);
   const arcs = [];
-  for (const psi of vertSliceBoundaries(a0, e0)) {
-    // half-plane direction at angle psi, counted from -q
-    const phi = psi - Math.PI / 2;
-    const w = [0, 1, 2].map((i) => p[i] * Math.cos(phi) + q[i] * Math.sin(phi));
-    let pts = [];
+  for (let k = 1; k < 8; k++) {
+    const turn = k * 22.5 * DEG;
+    const w = [0, 1, 2].map((i) => p[i] * Math.cos(turn) + q[i] * Math.sin(turn));
+    const pts = [];
     for (let i = 0; i <= 120; i++) {
       const t = (i / 120) * Math.PI;
-      const d = [0, 1, 2].map((j) => u[j] * Math.cos(t) + w[j] * Math.sin(t));
-      if (d[2] >= -1e-6) pts.push([d[0], d[1], Math.max(0, d[2])]);
-      else if (pts.length) { if (pts.length > 1) arcs.push(pts); pts = []; }
+      pts.push([0, 1, 2].map((j) => u[j] * Math.cos(t) + w[j] * Math.sin(t)));
     }
-    if (pts.length > 1) arcs.push(pts);
+    arcs.push(pts);
   }
   return arcs;
 }
 function guideSpec(g) {
   if (g === 'quadrants') return { circles: [30, 60], meridians: [0, 90, 180, 270], arcs: [] };
   if (g === 'slices') return { circles: [], meridians: [0, 45, 90, 135, 180, 225, 270, 315], arcs: [] };
-  if (g === 'lying') return { circles: [], meridians: [], arcs: lyingArcs(shapeParams.azimuth, shapeParams.axisElevation) };
+  if (g === 'lying') return { circles: [], meridians: [], arcs: lyingArcs(shapeParams.azimuth) };
   if (g === 'bands') return { circles: OCTA_BAND_ELEVATIONS.slice(1, 8), meridians: [], arcs: [] };
   return { circles: [], meridians: [], arcs: [] };
 }
@@ -595,8 +594,11 @@ function updateCloudMeshes() {
   layerDecor.visible = on;
   domeUniforms.layerOn.value = on ? 1 : 0;
   // to scale: 1.7 m tall, feet on the ground (the figure is 0.086 units tall)
-  observer.scale.setScalar(on ? (EYE_M * K) / 0.086 : 1);
-  observer.position.y = on ? GROUND_Y : 0;
+  // The observer's eye is the dome's centre: the figure stands one eye
+  // height (1.7 m, against the 100 ft dome) below it, as does the ground.
+  observer.scale.setScalar((EYE_M * K) / 0.078);
+  observer.position.y = GROUND_Y;
+  ground.position.y = GROUND_Y - 0.001;
   ground.visible = !on;
   groundLayer.visible = on;
   layerSurface.visible = false;
@@ -1076,9 +1078,7 @@ bindRange('azimuth', shapeParams, 'azimuth', (v) => `${v}°`, () => {
   if (guides === 'lying') buildGuides();
 });
 bindRange('centre', shapeParams, 'centerElevation', (v) => `${v}°`);
-bindRange('axis', shapeParams, 'axisElevation', (v) => `${v}°`, () => {
-  if (guides === 'lying') buildGuides();
-});
+bindRange('axis', shapeParams, 'sliceElevation', (v) => `${v}°`);
 bindRange('clumps', shapeParams, 'clumps', (v) => v, startMorph);
 bindRange('deform', shapeParams, 'deform', (v) => (v === 0 ? 'none' : v.toFixed(2)));
 bindRange('scale', shapeParams, 'scale', (v) => (v < 2.5 ? 'large' : v < 5 ? 'medium' : 'small'));
@@ -1097,7 +1097,7 @@ syncChips();
 
 const shapeHelp = {
   slice: 'Wedges from horizon to zenith. Each 45° of azimuth is exactly one octa.',
-  lying: 'The orange lies on its side. Each slice runs from the north horizon over the sky to the south horizon, a 180° arc. There are four slices on each side of the zenith, each one octa, filling from the east horizon. Direction turns the orange; axis elevation tips it up until, at 90°, it becomes the ordinary slice.',
+  lying: 'The orange lies on its side. Each slice runs from the north horizon over the sky to the south horizon, a 180° arc. There are four slices on each side of the zenith, each one octa. Elevation slides the cloud up from the east horizon, over the zenith, toward the west. Direction turns the orange.',
   cap: 'A round patch. Move its centre down toward the horizon: the horizon clips it and it stretches to keep its area.',
   band: 'Cloud rising from the horizon all round. 4/8 only reaches 30° elevation.',
   clumps: 'Several round clouds of mixed sizes. Change the count: the total area stays the same.',
@@ -1342,7 +1342,6 @@ function newQuiz() {
     shape: shapes[Math.floor(rnd() * shapes.length)],
     azimuth: Math.floor(rnd() * 360),
     centerElevation: 15 + rnd() * 75,
-    axisElevation: 0,
     clumps: 2 + Math.floor(rnd() * 12),
     deform: 0.15 + rnd() * 0.6,
     scale: 2 + rnd() * 4,
