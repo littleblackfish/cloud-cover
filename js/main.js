@@ -200,17 +200,28 @@ const PATTERN_GLSL = `
     return noise(vec3(q, 0.37)) + 0.45 * noise(vec3(q * 2.3 + vec2(17.0, 0.0), 1.7));
   }
 
-  // Cloud amount (0..1) at ground point g, where w is the size of one screen
-  // pixel there in metres. Where pixels grow bigger than the clouds, the
-  // pattern can't be shown and fades to the layer's average cover instead.
-  float cloudAt(vec2 g, float w) {
+  // Cloud amount (0..1) at ground point g. ddx, ddy: how far g moves across
+  // one screen pixel. Toward the horizon a pixel covers a long, thin strip of
+  // ground, so it is filtered along its two axes separately: samples are
+  // averaged along the long axis, and only when even the short axis is
+  // bigger than the clouds does the pattern fade to the layer's average.
+  float cloudSample(vec2 g, float w) {
+    return sheet == 1
+      ? smoothstep(sheetT - 0.6 * w * freq, sheetT + 0.6 * w * freq, sheetNoise(g))
+      : 1.0 - smoothstep(-0.6 * w, 0.6 * w, elementEdge(g));
+  }
+  float cloudAt(vec2 g, vec2 ddx, vec2 ddy) {
     float feature = sheet == 1 ? 0.5 / freq : max(2.0 * radius, 1.0);
-    float k = smoothstep(0.3, 1.0, w / feature);
+    float lx = length(ddx), ly = length(ddy);
+    vec2 major = lx > ly ? ddx : ddy;
+    float minor = max(min(lx, ly), 1e-3);
+    float k = smoothstep(0.3, 1.0, minor / feature);
     float c = 0.0;
     if (k < 0.999) {
-      c = sheet == 1
-        ? smoothstep(sheetT - 0.6 * w * freq, sheetT + 0.6 * w * freq, sheetNoise(g))
-        : 1.0 - smoothstep(-0.6 * w, 0.6 * w, elementEdge(g));
+      // four samples spread along the long axis (they coincide when the
+      // pixel is small, which costs nothing visible)
+      c = 0.25 * (cloudSample(g - 0.375 * major, minor) + cloudSample(g - 0.125 * major, minor)
+                + cloudSample(g + 0.125 * major, minor) + cloudSample(g + 0.375 * major, minor));
     }
     return mix(c, coverMean, k) * layerFade;
   }
@@ -274,8 +285,8 @@ const dome = new THREE.Mesh(
           float t = max(d.y, 0.0) / hl;
           float dist = 2.0 * layerHeight / (t + sqrt(t * t + 2.0 * layerHeight / 6371000.0));
           vec2 g = hor / hl * dist;
-          float w = length(fwidth(g));
-          a = (d.y < 0.0 || dist > layerReach) ? 0.0 : cloudAt(g, w);
+          vec2 gx = dFdx(g), gy = dFdy(g);
+          a = (d.y < 0.0 || dist > layerReach) ? 0.0 : cloudAt(g, gx, gy);
         } else {
           float f = texture2D(field, vUv).r;
           float w = max(fwidth(f), 1e-5);
@@ -481,7 +492,7 @@ const SURFACE_FRAG = `
   ${PATTERN_GLSL}
   void main() {
     #include <logdepthbuf_fragment>
-    float a = cloudAt(vGround, length(fwidth(vGround)));
+    float a = cloudAt(vGround, dFdx(vGround), dFdy(vGround));
     if (a < 0.01) discard;
     gl_FragColor = vec4(color, 0.95 * a);
   }`;
