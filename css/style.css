@@ -34,6 +34,23 @@
   }
 }
 
+:root[data-theme="dark"] {
+    --bg: #0d1117;
+    --panel: #151b23;
+    --ink: #e6ebf1;
+    --ink-2: #aab4c0;
+    --ink-3: #7d8896;
+    --line: #2a333e;
+    --accent: #5b9bff;
+    --accent-ink: #0d1117;
+    --chip: #1e2631;
+    --good: #4cc38a;
+    --bad: #ff8a70;
+    --bar: #5b9bff;
+    --bar-track: #232c38;
+    color-scheme: dark;
+  }
+
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body {
