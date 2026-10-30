@@ -17,7 +17,7 @@ const $$ = (s) => [...document.querySelectorAll(s)];
 
 const shapeParams = {
   octas: 3, shape: 'slice', azimuth: 0, centerElevation: 90, sliceElevation: 0, clumps: 6,
-  deform: 0, scale: 3, time: 0, seed: 1, animate: false,
+  deform: 0, scale: 3, time: 0, seed: 1, animate: true, // scale: noise feature size, fixed
 };
 const layerParams = {
   etage: 'low', form: 'cumuliform',
@@ -33,7 +33,7 @@ const quiz = { answered: false, right: 0, total: 0, streak: 0 };
 
 let mode = 'octas'; // 'octas' | 'layer' | 'quiz'
 let view = 'outside';
-let guides = 'quadrants';
+let guides = 'lying';
 let mapProjection = 'equal-area';
 let dirty = true;
 
@@ -336,10 +336,8 @@ function lyingArcs(a0) {
   return arcs;
 }
 function guideSpec(g) {
-  if (g === 'quadrants') return { circles: [30, 60], meridians: [0, 90, 180, 270], arcs: [] };
   if (g === 'slices') return { circles: [], meridians: [0, 45, 90, 135, 180, 225, 270, 315], arcs: [] };
   if (g === 'lying') return { circles: [], meridians: [], arcs: lyingArcs(shapeParams.azimuth) };
-  if (g === 'bands') return { circles: OCTA_BAND_ELEVATIONS.slice(1, 8), meridians: [], arcs: [] };
   return { circles: [], meridians: [], arcs: [] };
 }
 // fade: crossfade from the old guides (button changes); sliders that move
@@ -857,7 +855,6 @@ function drawSkyMap() {
     mapCtx.beginPath();
     mapCtx.arc(c, c, ringR(e), 0, 2 * Math.PI);
     mapCtx.stroke();
-    if (guides !== 'bands') mapCtx.fillText(`${e}°`, c + 4, c - ringR(e) + 16);
   }
   for (const a of meridians) {
     mapCtx.beginPath();
@@ -1016,7 +1013,7 @@ let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
-  if (mode === 'octas' && shapeParams.animate) {
+  if (mode === 'octas' && shapeParams.animate && (shapeParams.deform > 0 || shapeParams.shape === 'patchy')) {
     shapeParams.time += dt * 0.6;
     dirty = true;
   }
@@ -1081,7 +1078,6 @@ bindRange('centre', shapeParams, 'centerElevation', (v) => `${v}°`);
 bindRange('axis', shapeParams, 'sliceElevation', (v) => `${v}°`);
 bindRange('clumps', shapeParams, 'clumps', (v) => v, startMorph);
 bindRange('deform', shapeParams, 'deform', (v) => (v === 0 ? 'none' : v.toFixed(2)));
-bindRange('scale', shapeParams, 'scale', (v) => (v < 2.5 ? 'large' : v < 5 ? 'medium' : 'small'));
 
 const chips = $('#octa-chips');
 for (let k = 0; k <= 8; k++) {
@@ -1099,7 +1095,6 @@ const shapeHelp = {
   slice: 'Wedges from horizon to zenith. Each 45° of azimuth is exactly one octa.',
   lying: 'The orange lies on its side. Each slice runs from the north horizon over the sky to the south horizon, a 180° arc. There are four slices on each side of the zenith, each one octa. Elevation slides the cloud up from the east horizon, over the zenith, toward the west. Direction turns the orange.',
   cap: 'A round patch. Move its centre down toward the horizon: the horizon clips it and it stretches to keep its area.',
-  band: 'Cloud rising from the horizon all round. 4/8 only reaches 30° elevation.',
   clumps: 'Several round clouds of mixed sizes. Change the count: the total area stays the same.',
   patchy: 'Random patches. The pattern changes, the covered area does not.',
 };
@@ -1132,12 +1127,6 @@ $$('#shape button').forEach((b) => b.addEventListener('click', () => {
 syncShape();
 
 $('#animate').addEventListener('change', (e) => { shapeParams.animate = e.target.checked; });
-$('#reseed').addEventListener('click', () => {
-  startMorph();
-  shapeParams.seed = 1 + Math.floor(Math.random() * 1e6);
-  if (shapeParams.deform === 0 && shapeParams.shape !== 'patchy') $('#deform').value = shapeParams.deform = 0.4;
-  $('#deform').dispatchEvent(new Event('input'));
-});
 
 $$('#guides button').forEach((b) => b.addEventListener('click', () => setGuides(b.dataset.guides)));
 
@@ -1437,6 +1426,16 @@ $('#skymap-proj').addEventListener('click', () => {
     drawSkyMap();
     mapCanvas.style.opacity = 1;
   }, REDUCED_MOTION ? 0 : 180);
+});
+
+// Hide or show the side panel; the 3D view takes the whole window.
+$('#panel-toggle').addEventListener('click', (ev) => {
+  const full = $('.app').classList.toggle('full');
+  const b = ev.currentTarget;
+  b.textContent = full ? 'Show controls' : 'Hide controls';
+  b.title = full ? 'Show the controls' : 'Hide the controls';
+  b.setAttribute('aria-expanded', String(!full));
+  $('#panel').inert = full;
 });
 
 // notes: equal-area band table

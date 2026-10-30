@@ -33,7 +33,9 @@
       <div class="readout" id="readout" aria-live="polite"></div>
     </main>
 
-    <aside class="panel">
+    <button class="panel-toggle" id="panel-toggle" aria-controls="panel" aria-expanded="true"
+      title="Hide the controls">Hide controls</button>
+    <aside class="panel" id="panel">
       <header>
         <h1>Celestial Dome Octas</h1>
         <p class="sub">See what 0–8 eighths of the sky really look like.</p>
@@ -60,7 +62,6 @@
             <button data-shape="slice" class="on">Slice</button>
             <button data-shape="lying">Vert slice</button>
             <button data-shape="cap">Round patch</button>
-            <button data-shape="band">Horizon ring</button>
             <button data-shape="clumps">Clumps</button>
             <button data-shape="patchy">Patchy</button>
           </div>
@@ -90,13 +91,8 @@
             <span>Amount <output id="deform-out">0</output></span>
             <input type="range" id="deform" min="0" max="1.5" step="0.01" value="0">
           </label>
-          <label class="sub-field">
-            <span>Feature size <output id="scale-out">medium</output></span>
-            <input type="range" id="scale" min="1" max="8" step="0.1" value="3">
-          </label>
           <div class="row">
-            <label class="check"><input type="checkbox" id="animate"> Let it drift</label>
-            <button id="reseed">New random shape</button>
+            <label class="check"><input type="checkbox" id="animate" checked> Let it drift</label>
           </div>
         </fieldset>
 
@@ -104,18 +100,17 @@
           <legend>Guides on the dome</legend>
           <div class="seg" id="guides">
             <button data-guides="none">None</button>
-            <button data-guides="quadrants" class="on">Quadrants + 30°/60°</button>
-            <button data-guides="slices">8 slices</button>
-            <button data-guides="lying">8 vert slices</button>
-            <button data-guides="bands">8 equal bands</button>
+            <button data-guides="slices">8 horizontal slices</button>
+            <button data-guides="lying" class="on">8 vertical slices</button>
           </div>
         </fieldset>
 
         <div class="callout">
-          <strong>Why does it look wrong?</strong> Try <em>Horizon ring</em> at 4/8:
-          half the dome is the strip below 30° elevation. Then try
-          <em>Round patch</em> at 1/8: one octa around the zenith only reaches
-          down to 61°. See the Notes tab for why.
+          <strong>Why does it look wrong?</strong> Try <em>Round patch</em> at
+          1/8: one octa around the zenith only reaches down to 61°. With the
+          vertical slices, the ones by the horizon look thin and the ones
+          overhead look wide, yet each is exactly one octa. See the Notes tab
+          for why.
         </div>
       </section>
 
@@ -277,7 +272,7 @@
           The dome still splits into eight equal slices, four on each side of
           the zenith. The slices next to the horizon look thin, and the ones
           overhead look wide, but every one is an octa. Try
-          <em>Vert slice</em> with the <em>8 vert slices</em> guides.
+          <em>Vert slice</em> with the <em>8 vertical slices</em> guides.
         </p>
 
         <h3>4. Your eye squashes the dome</h3>

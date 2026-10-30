@@ -64,7 +64,21 @@ body {
   display: grid;
   grid-template-columns: 1fr 400px;
   height: 100vh;
+  position: relative;
+  overflow: hidden;
+  transition: grid-template-columns .35s ease;
 }
+/* controls hidden: the panel's column closes and the panel slides out */
+.app.full { grid-template-columns: 1fr 0px; }
+
+.panel-toggle {
+  position: absolute; top: 12px; right: calc(400px + 12px); z-index: 3;
+  font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 6px; cursor: pointer;
+  background: rgba(20, 28, 40, .75); color: #dfe6ee; border: 1px solid rgba(255,255,255,.15);
+  transition: right .35s ease;
+}
+.app.full .panel-toggle { right: 12px; }
+.panel-toggle:focus-visible, .view-switch button:focus-visible { outline: 2px solid #5b9bff; outline-offset: 2px; }
 
 /* ---------------------------------------------------------------- stage */
 .stage {
@@ -127,6 +141,7 @@ button.link {
 
 /* ---------------------------------------------------------------- panel */
 .panel {
+  min-width: 400px; /* keeps its width while its column closes */
   background: var(--panel);
   border-left: 1px solid var(--line);
   overflow-y: auto;
@@ -210,8 +225,11 @@ table.mini { width: auto; margin: 6px 0; }
 code { font-size: 12.5px; background: var(--chip); padding: 1px 4px; border-radius: 4px; }
 
 @media (max-width: 860px) {
-  .app { grid-template-columns: 1fr; grid-template-rows: 62vh auto; height: auto; }
-  .panel { border-left: 0; border-top: 1px solid var(--line); overflow: visible; padding: 14px 16px 40px; }
+  .app { grid-template-columns: 1fr; grid-template-rows: 62vh auto; height: auto; overflow: visible; }
+  .app.full { grid-template-columns: 1fr; grid-template-rows: 100vh; }
+  .app.full .panel { display: none; }
+  .panel-toggle, .app.full .panel-toggle { right: 12px; top: 46px; }
+  .panel { min-width: 0; border-left: 0; border-top: 1px solid var(--line); overflow: visible; padding: 14px 16px 40px; }
   .tabs { top: 0; }
   .skymap canvas { width: 130px; height: 130px; }
   .skymap figcaption { flex-direction: column; gap: 0; font-size: 11px; }
@@ -226,5 +244,5 @@ code { font-size: 12.5px; background: var(--chip); padding: 1px 4px; border-radi
 #lcover-mode { margin-bottom: 6px; }
 
 @media (prefers-reduced-motion: reduce) {
-  #view, .skymap, .skymap canvas { transition: none; }
+  #view, .skymap, .skymap canvas, .app, .panel-toggle { transition: none; }
 }
