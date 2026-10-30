@@ -18,8 +18,8 @@ and is hosted on GitHub Pages without a build step.
   to see how a camera-style projection distorts it.
 - **Cloud layer tab:** one flat cloud layer in the low, mid or high étage,
   either cumuliform (separate elements) or stratiform (a sheet with gaps).
-  Coverage is picked in octas, either as seen on the dome or as the real
-  map-view amount. The scene is to scale and follows the Earth's curve: an
+  Coverage is picked in octas as seen on the dome; the clouds are sized to
+  give it. Each étage tints its clouds. The scene is to scale and follows the Earth's curve: an
   observer with eyes 1.7 m up, a 100 ft dome, ground out to the 4.65 km
   horizon, and the layer drawn out to the observer's line of sight. The GPU
   draws the layer's projection on the dome directly, pixel by pixel, from

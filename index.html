@@ -33,8 +33,11 @@
       <div class="readout" id="readout" aria-live="polite"></div>
     </main>
 
-    <button class="panel-toggle" id="panel-toggle" aria-controls="panel" aria-expanded="true"
-      title="Hide the controls">Hide controls</button>
+    <div class="stage-tools">
+      <button id="freeze" aria-pressed="false" title="Stop the cloud outline drifting">Freeze</button>
+      <button id="panel-toggle" aria-controls="panel" aria-expanded="true"
+        title="Hide the controls">Hide controls</button>
+    </div>
     <aside class="panel" id="panel">
       <header>
         <h1>Celestial Dome Octas</h1>
@@ -89,11 +92,8 @@
           <legend>Deform (coverage stays fixed)</legend>
           <label class="sub-field" id="f-deform">
             <span>Amount <output id="deform-out">0</output></span>
-            <input type="range" id="deform" min="0" max="1.5" step="0.01" value="0">
+            <input type="range" id="deform" min="0" max="1.5" step="0.01" value="0.3">
           </label>
-          <div class="row">
-            <label class="check"><input type="checkbox" id="animate" checked> Let it drift</label>
-          </div>
         </fieldset>
 
         <fieldset class="field">
@@ -105,13 +105,6 @@
           </div>
         </fieldset>
 
-        <div class="callout">
-          <strong>Why does it look wrong?</strong> Try <em>Round patch</em> at
-          1/8: one octa around the zenith only reaches down to 61°. With the
-          vertical slices, the ones by the horizon look thin and the ones
-          overhead look wide, yet each is exactly one octa. See the Notes tab
-          for why.
-        </div>
       </section>
 
       <!-- ===================================================== LAYER -->
@@ -124,8 +117,8 @@
           Clouds are higher, so they are drawn out to where the observer's
           line of sight, grazing that horizon, still reaches them: about
           130 km for a 4,000 ft layer. Everything follows the Earth's curve.
-          Zoom out to see the whole layer and the height mast with the three
-          étages.
+          Each étage tints its clouds (low cream, mid green, high lavender),
+          and the view pulls back as the layer rises.
         </p>
 
         <fieldset class="field">
@@ -147,15 +140,10 @@
 
         <div class="field">
           <span>Coverage <output id="lcover-out"></output></span>
-          <div class="seg" id="lcover-mode">
-            <button data-cmode="dome" class="on">Seen on the dome</button>
-            <button data-cmode="map">Map view, from above</button>
-          </div>
           <div class="chips" id="lcover-chips"></div>
           <p class="help">
-            Seen on the dome: the layer adjusts its cloud sizes so you see this
-            many octas, even as it changes height. Map view: the real cover
-            stays fixed and what you see changes.
+            Octas as seen on the dome. The layer sizes its clouds to show this
+            amount, even as it changes height.
           </p>
         </div>
         <div class="field units">

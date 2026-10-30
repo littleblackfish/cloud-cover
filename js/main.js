@@ -17,13 +17,14 @@ const $$ = (s) => [...document.querySelectorAll(s)];
 
 const shapeParams = {
   octas: 3, shape: 'slice', azimuth: 0, centerElevation: 90, sliceElevation: 0, clumps: 6,
-  deform: 0, scale: 3, time: 0, seed: 1, animate: true, // scale: noise feature size, fixed
+  deform: 0.3, scale: 3, time: 0, seed: 1, animate: true, // scale: noise feature size, fixed
 };
 const layerParams = {
   etage: 'low', form: 'cumuliform',
-  // octas: chosen amount; coverMode says whether it is the amount seen on the
+  // octas: the amount seen on the dome; cover: the map-view fraction that
+  // gives it (solved for)
   // dome or the map-view amount. cover: resulting map-view fraction.
-  octas: 3, coverMode: 'dome', cover: 3 / 8,
+  octas: 3, cover: 3 / 8,
   base: 4000 * FT, thickness: 0, size: 1500, extent: 400, // a flat layer
   curved: true, // Earth curvature: always on
   seed: 1, showClouds: true,
@@ -444,82 +445,22 @@ groundLayer.position.y = GROUND_Y;
 groundLayer.visible = false;
 scene.add(groundLayer);
 
-// Étage limits in feet, as used for reporting.
+// Étage limits in feet, as used for reporting, and the tint each étage's
+// clouds get. The tint follows the cloud base, so it blends as the layer
+// moves from one étage to the next.
+const ETAGE_TINT = { low: [252, 236, 206], mid: [214, 236, 222], high: [226, 218, 252] };
+function tintFor(baseM) {
+  const ft = baseM / FT;
+  const blend = (a, b, t) => a.map((v, i) => v + (b[i] - v) * Math.min(1, Math.max(0, t)));
+  if (ft < 6550) return blend(ETAGE_TINT.low, ETAGE_TINT.mid, (ft - 5500) / 1050);
+  if (ft < 19500) return blend(ETAGE_TINT.mid, ETAGE_TINT.high, (ft - 19000) / 1000);
+  return ETAGE_TINT.high;
+}
 const ETAGES = {
   low: { name: 'Low', base: [300, 6500], band: [0, 6500] },
   mid: { name: 'Mid', base: [6600, 19000], band: [6500, 20000] },
   high: { name: 'High', base: [20000, 40000], band: [20000, 45000] },
 };
-
-const layerDecor = new THREE.Group();
-scene.add(layerDecor);
-const etageLabels = {};
-
-function labelSprite(text, size) {
-  const c = document.createElement('canvas');
-  c.width = 512;
-  c.height = 128;
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  // fixed on-screen size, so labels stay readable at any zoom
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: t, depthWrite: false, depthTest: false, transparent: true, sizeAttenuation: false,
-  }));
-  s.center.set(0, 0.5);
-  s.scale.set(size * 4, size, 1);
-  s.renderOrder = 5;
-  s.userData.draw = (active) => {
-    const g = c.getContext('2d');
-    g.clearRect(0, 0, 512, 128);
-    g.font = `${active ? 700 : 500} 56px system-ui, sans-serif`;
-    g.textBaseline = 'middle';
-    g.fillStyle = active ? '#ffd27a' : '#c4cfdb';
-    g.fillText(text, 8, 64);
-    t.needsUpdate = true;
-  };
-  s.userData.draw(false);
-  return s;
-}
-
-// A height mast beside the observer with the étage boundaries marked.
-const MAST = dirFromAzEl(320 * DEG, 0, 50).setY(GROUND_Y); // 5,000 ft away, behind the dome as first seen
-const etageMarker = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.25, 0.25, 1, 12),
-  new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.6 }),
-);
-{
-  const top = 45000 * FT * K;
-  layerDecor.add(new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints([MAST.clone(), MAST.clone().setY(GROUND_Y + top)]),
-    new THREE.LineBasicMaterial({ color: 0xaec6e0, transparent: true, opacity: 0.8 }),
-  ));
-  layerDecor.add(etageMarker);
-  for (const ft of [6500, 20000]) {
-    const y = ft * FT * K;
-    const disc = new THREE.Mesh(
-      curvedDisc(sightRange(ft * FT) * K, 96),
-      new THREE.MeshBasicMaterial({ color: 0xaec6e0, transparent: true, opacity: 0.035, side: THREE.DoubleSide, depthWrite: false }),
-    );
-    disc.position.y = GROUND_Y + y;
-    const tick = labelSprite(`${ft.toLocaleString('en-CA')} ft`, 0.035);
-    tick.position.copy(MAST).setY(GROUND_Y + y);
-    layerDecor.add(disc, tick);
-  }
-  for (const [key, e] of Object.entries(ETAGES)) {
-    const label = labelSprite(`${e.name} étage`, 0.045);
-    label.position.copy(MAST).setY(GROUND_Y + ((e.band[0] + Math.min(e.band[1], 40000)) / 2) * FT * K);
-    etageLabels[key] = label;
-    layerDecor.add(label);
-  }
-}
-
-function updateEtageDecor() {
-  const [lo, hi] = ETAGES[layerParams.etage].band;
-  const y0 = lo * FT * K, y1 = Math.min(hi, 45000) * FT * K;
-  etageMarker.scale.set(1, y1 - y0, 1);
-  etageMarker.position.copy(MAST).setY(GROUND_Y + (y0 + y1) / 2);
-  for (const [key, label] of Object.entries(etageLabels)) label.userData.draw(key === layerParams.etage);
-}
 
 // The layer in 3D: one curved surface out to the observer's line of sight.
 const metresPerUnit = { value: SCENE_M };
@@ -583,14 +524,17 @@ function updatePattern() {
     patternUniforms.radius.value = geo.r;
     patternUniforms.occupied.value = geo.p;
   }
+  const tint = tintFor(p.base);
+  domeUniforms.cloudColor.value.set(tint[0] / 255, tint[1] / 255, tint[2] / 255);
+  layerSurface.material.uniforms.color.value.setRGB(tint[0] / 255, tint[1] / 255, tint[2] / 255, THREE.SRGBColorSpace);
   domeUniforms.layerHeight.value = Math.max(1, p.base - EYE_M);
   domeUniforms.layerReach.value = p.extent * 1000;
 }
 
 function updateCloudMeshes() {
   const on = mode === 'layer';
-  layerDecor.visible = on;
   domeUniforms.layerOn.value = on ? 1 : 0;
+  if (!on) domeUniforms.cloudColor.value.set(CLOUD[0] / 255, CLOUD[1] / 255, CLOUD[2] / 255);
   // to scale: 1.7 m tall, feet on the ground (the figure is 0.086 units tall)
   // The observer's eye is the dome's centre: the figure stands one eye
   // height (1.7 m, against the 100 ft dome) below it, as does the ground.
@@ -601,7 +545,6 @@ function updateCloudMeshes() {
   groundLayer.visible = on;
   layerSurface.visible = false;
   if (!on) return;
-  updateEtageDecor();
   updatePattern();
   if (!layerParams.showClouds || layerParams.cover <= 0) return;
   const reach = Math.min(layerParams.extent * 1000, sightRange(layerParams.base));
@@ -635,6 +578,10 @@ const OUTSIDE = {
   octas: { target: new THREE.Vector3(0, 0.25, 0), out: 3.19, up: 1.25, fov: 45, heading: Math.atan2(-2.1, 2.4) },
   layer: { target: new THREE.Vector3(0, 2, 0), out: 11.0, up: 0.6, fov: 60, heading: Math.atan2(-7, 8.5) },
 };
+// Outside the cloud layer the view is framed for a 4,000 ft base; higher
+// layers scale the whole framing up, so the clouds stay in view.
+const layerViewScale = () => Math.max(1, (layerParams.base * K) / 40);
+let viewScaleShown = 1;
 // heading: compass azimuth (radians) the camera faces
 function cameraHeading() {
   const f = new THREE.Vector3();
@@ -682,13 +629,15 @@ function setView(v, { yaw, reset = false, instant = false } = {}) {
   if (v === 'outside') {
     setOrbitLimits();
     observer.visible = true;
-    for (const label of Object.values(etageLabels)) label.visible = true;
     const o = OUTSIDE[mode === 'layer' ? 'layer' : 'octas'];
     const h = reset ? o.heading : heading;
+    const sc = mode === 'layer' ? layerViewScale() : 1;
+    viewScaleShown = sc;
+    const target = o.target.clone().multiplyScalar(sc);
     // stand back from the target, opposite the way we face
-    const pos = o.target.clone().add(new THREE.Vector3(-Math.sin(h) * o.out, o.up, Math.cos(h) * o.out));
-    flyTo(pos, o.target, o.fov, ms, () => {
-      orbit.target.copy(o.target);
+    const pos = target.clone().add(new THREE.Vector3(-Math.sin(h) * o.out, o.up, Math.cos(h) * o.out).multiplyScalar(sc));
+    flyTo(pos, target, o.fov, ms, () => {
+      orbit.target.copy(target);
       orbit.enabled = view === 'outside';
       orbit.update();
     });
@@ -700,7 +649,6 @@ function setView(v, { yaw, reset = false, instant = false } = {}) {
     flyTo(new THREE.Vector3(0, 0, 0), dirFromAzEl(look.yaw, look.pitch), look.fov, ms, () => {
       const inside = view === 'inside';
       observer.visible = !inside;
-      for (const label of Object.values(etageLabels)) label.visible = !inside;
     });
     $('#view-hint').textContent = 'Drag to look around · scroll to change field of view';
   }
@@ -750,6 +698,7 @@ const SKY = [120, 170, 225];
 const CLOUD = [244, 246, 249];
 
 function paintDome(soft) {
+  const cc = mode === 'layer' ? tintFor(layerParams.base) : CLOUD;
   const skyAlpha = view === 'inside' ? 0.62 : 0.2; // for the sky map's copy
   const cloudAlpha = 0.93;
   const toHalf = THREE.DataUtils.toHalfFloat;
@@ -769,9 +718,9 @@ function paintDome(soft) {
       a = cover[k];
     }
     const o = k * 4;
-    d[o] = SKY[0] + (CLOUD[0] - SKY[0]) * a;
-    d[o + 1] = SKY[1] + (CLOUD[1] - SKY[1]) * a;
-    d[o + 2] = SKY[2] + (CLOUD[2] - SKY[2]) * a;
+    d[o] = SKY[0] + (cc[0] - SKY[0]) * a;
+    d[o + 1] = SKY[1] + (cc[1] - SKY[1]) * a;
+    d[o + 2] = SKY[2] + (cc[2] - SKY[2]) * a;
     d[o + 3] = 255 * (skyAlpha + (cloudAlpha - skyAlpha) * a);
   }
   fieldTexture.needsUpdate = true;
@@ -964,7 +913,6 @@ function easeOctasTo(target, ms = 700) {
 
 // Cloud layer: the octas and the map-view cover ease too.
 let layerOctasShown = layerParams.octas;
-let coverFrom = null, coverEase = 1;
 
 // Rays start at the observer's eye, 1.7 m above the ground.
 const rayParams = (quick) => ({ ...layerParams, base: layerParams.base - EYE_M, quick });
@@ -973,11 +921,7 @@ function recompute() {
   if (mode === 'layer') {
     // the GPU draws the dome; this cast only feeds the numbers and the sky map
     const quick = true;
-    let target = layerParams.coverMode === 'dome'
-      ? solvePlanCover(rayParams(quick), layerOctasShown / 8, layerParams.cover)
-      : layerOctasShown / 8;
-    if (coverFrom !== null) target = coverFrom + (target - coverFrom) * coverEase;
-    layerParams.cover = target;
+    layerParams.cover = solvePlanCover(rayParams(quick), layerOctasShown / 8, layerParams.cover);
     layerGeo = castLayer(rayParams(quick), cover);
     let s = 0;
     for (let k = 0; k < N; k++) s += cover[k] * grid.weight[k];
@@ -1039,6 +983,18 @@ function frame(now) {
   if (dirty) {
     dirty = false;
     recompute();
+  }
+  if (!camFlying && view === 'outside' && mode === 'layer') {
+    // follow the cloud base: scale the view about the observer as it rises
+    // or falls, keeping the angle the user chose
+    const sc = layerViewScale();
+    if (Math.abs(sc - viewScaleShown) > 1e-4) {
+      const r = sc / viewScaleShown;
+      const offset = camera.position.clone().sub(orbit.target).multiplyScalar(r);
+      orbit.target.multiplyScalar(r);
+      camera.position.copy(orbit.target).add(offset);
+      viewScaleShown = sc;
+    }
   }
   if (!camFlying) {
     if (view === 'inside') updateInsideCamera();
@@ -1126,7 +1082,14 @@ $$('#shape button').forEach((b) => b.addEventListener('click', () => {
 }));
 syncShape();
 
-$('#animate').addEventListener('change', (e) => { shapeParams.animate = e.target.checked; });
+// Freeze stops the outline drifting (only the Octas tab drifts).
+$('#freeze').addEventListener('click', (ev) => {
+  shapeParams.animate = !shapeParams.animate;
+  const frozen = !shapeParams.animate;
+  ev.currentTarget.textContent = frozen ? 'Unfreeze' : 'Freeze';
+  ev.currentTarget.setAttribute('aria-pressed', String(frozen));
+  ev.currentTarget.title = frozen ? 'Let the cloud outline drift again' : 'Stop the cloud outline drifting';
+});
 
 $$('#guides button').forEach((b) => b.addEventListener('click', () => setGuides(b.dataset.guides)));
 
@@ -1187,15 +1150,6 @@ for (let k = 0; k <= 8; k++) {
   });
   lchips.append(b);
 }
-$$('#lcover-mode button').forEach((b) => b.addEventListener('click', () => {
-  if (b.dataset.cmode === layerParams.coverMode) return;
-  layerParams.coverMode = b.dataset.cmode;
-  syncLayerChips();
-  // ease from the current cover to the one the new mode asks for
-  coverFrom = layerParams.cover;
-  animate('cover', 700, (e) => { coverEase = e; dirty = true; }, () => { coverFrom = null; });
-}));
-
 // Swap the layer for a different one (form, random pattern): the clouds fade
 // out, the change is made, and they fade back in.
 function swapLayer(change) {
@@ -1215,7 +1169,6 @@ function syncLayerChips() {
     b.title = b.disabled ? 'A fully covered layer is a sheet: choose Stratiform' : '';
   });
   $('#lcover-out').textContent = `${layerParams.octas}/8`;
-  $$('#lcover-mode button').forEach((b) => b.classList.toggle('on', b.dataset.cmode === layerParams.coverMode));
 }
 $$('#units button').forEach((b) => b.addEventListener('click', () => {
   heightUnit = b.dataset.units;
@@ -1281,15 +1234,13 @@ function applyFormDefaults() {
 $$('#etage button').forEach((b) => b.addEventListener('click', () => {
   if (b.dataset.etage === layerParams.etage) return;
   layerParams.etage = b.dataset.etage;
-  // Map view: the same layer just moves. Seen on the dome: it also takes the
-  // new étage's typical spacing, and the solver keeps the octas.
+  // The layer moves to a typical base for the new étage and takes its typical
+  // spacing; the solver keeps the octas.
   const d = LAYER_DEFAULTS[layerParams.etage][layerParams.form];
   const to = { base: d.base * FT };
   let sizeAtEnd = null;
-  if (layerParams.coverMode === 'dome') {
-    if (layerParams.form === 'cumuliform') to.size = d.size;
-    else sizeAtEnd = d.size;
-  }
+  if (layerParams.form === 'cumuliform') to.size = d.size;
+  else sizeAtEnd = d.size;
   const from = Object.fromEntries(Object.keys(to).map((k) => [k, layerParams[k]]));
   baseTween = { from, to, sizeAtEnd, start: performance.now(), duration: 1500 };
   syncLayerForm();
@@ -1372,6 +1323,7 @@ $('#quiz-new').addEventListener('click', newQuiz);
 // ---------------------------------------------------------------- tabs, view
 
 const canvasFade = (o) => { canvas.style.opacity = o; };
+const syncFreeze = () => { $('#freeze').hidden = mode !== 'octas'; };
 $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
   const tab = b.dataset.tab;
   $$('.tabs button').forEach((x) => x.classList.toggle('on', x === b));
@@ -1391,6 +1343,7 @@ $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
     if (mode === 'quiz' && !quizParams) newQuiz();
     else easeOctasTo(mode === 'quiz' ? quizParams.octas : shapeParams.octas);
     syncMap();
+    syncFreeze();
     dirty = true;
     return;
   }
@@ -1405,6 +1358,7 @@ $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
     if (view === 'outside') setView('outside', { reset: true, instant: true });
     recompute();
     syncMap();
+    syncFreeze();
     canvasFade(1);
   }, REDUCED_MOTION ? 0 : 250);
 }));
