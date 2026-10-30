@@ -73,7 +73,7 @@ body {
   overflow: hidden;
   min-height: 0;
 }
-#view { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+#view { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; transition: opacity .25s ease; }
 #view:active { cursor: grabbing; }
 
 .view-switch {
@@ -103,12 +103,13 @@ body {
   border: 1px solid rgba(255,255,255,.12);
   border-radius: 10px; padding: 8px;
 }
-.skymap canvas { display: block; width: 220px; height: 220px; }
+.skymap canvas { display: block; width: 220px; height: 220px; transition: opacity .18s ease; }
 .skymap figcaption {
   color: #c4cfdb; font-size: 12px; margin-top: 4px;
   display: flex; justify-content: space-between; gap: 8px;
 }
-.skymap.hidden { display: none; }
+.skymap { transition: opacity .3s ease; }
+.skymap.hidden { opacity: 0; pointer-events: none; }
 button.link {
   background: none; border: 0; padding: 0; font: inherit;
   color: #7fb2ff; cursor: pointer; text-decoration: underline;
@@ -223,3 +224,7 @@ code { font-size: 12.5px; background: var(--chip); padding: 1px 4px; border-radi
 .seg button small { display: block; font-size: 11px; opacity: .8; }
 .chips button:disabled { opacity: .4; cursor: not-allowed; }
 #lcover-mode { margin-bottom: 6px; }
+
+@media (prefers-reduced-motion: reduce) {
+  #view, .skymap, .skymap canvas { transition: none; }
+}

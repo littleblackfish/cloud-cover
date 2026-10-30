@@ -37,6 +37,33 @@ let guides = 'quadrants';
 let mapProjection = 'equal-area';
 let dirty = true;
 
+// ================================================================ transitions
+//
+// Nothing should jump: camera moves, view changes, shape changes and the like
+// all run as short eased animations. animate(key, ms, step, done) calls
+// step(e) every frame with e easing from 0 to 1; a new animation with the
+// same key replaces the old one.
+
+const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const easeInOut = (t) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
+const tweens = new Map();
+function animate(key, ms, step, done) {
+  const tw = { start: performance.now(), ms: REDUCED_MOTION ? 0 : ms, step, done };
+  tweens.set(key, tw);
+  if (tw.ms === 0) runTween(key, tw, tw.start);
+}
+function runTween(key, tw, now) {
+  const t = tw.ms > 0 ? Math.min(1, (now - tw.start) / tw.ms) : 1;
+  tw.step(easeInOut(t));
+  if (t >= 1) {
+    if (tweens.get(key) === tw) tweens.delete(key);
+    tw.done?.();
+  }
+}
+function runTweens(now) {
+  for (const [key, tw] of [...tweens]) runTween(key, tw, now);
+}
+
 const field = new Float32Array(N);
 const cover = new Float32Array(N);
 let threshold = 0;
@@ -112,11 +139,12 @@ const patternUniforms = {
   freq: { value: 1 / 1500 },
   sheetT: { value: 0 },
   coverMean: { value: 0 },
+  layerFade: { value: 1 }, // fades the clouds out and in when the layer is swapped
   perm: { value: permTexture },
 };
 const PATTERN_GLSL = `
   uniform int sheet, seed;
-  uniform float spacing, radius, occupied, freq, sheetT, coverMean;
+  uniform float spacing, radius, occupied, freq, sheetT, coverMean, layerFade;
   uniform sampler2D perm;
   // layer.js hash3
   uvec3 hash3(int ix, int iy) {
@@ -183,7 +211,7 @@ const PATTERN_GLSL = `
         ? smoothstep(sheetT - 0.6 * w * freq, sheetT + 0.6 * w * freq, sheetNoise(g))
         : 1.0 - smoothstep(-0.6 * w, 0.6 * w, elementEdge(g));
     }
-    return mix(c, coverMean, k);
+    return mix(c, coverMean, k) * layerFade;
   }
 `;
 
@@ -285,8 +313,9 @@ function meridianLine(a, r, color, opacity) {
 }
 scene.add(circleLine(0, 1.001, 0xaec6e0, 0.9));
 
-const guideGroup = new THREE.Group();
+let guideGroup = new THREE.Group();
 scene.add(guideGroup);
+let fadingGuides = null;
 // Vert-slice boundaries: half great circles from one end of the slicing axis
 // to the other, cut at the horizon. Points are [east, north, up].
 function lyingArcs(a0, e0) {
@@ -314,8 +343,14 @@ function guideSpec(g) {
   if (g === 'bands') return { circles: OCTA_BAND_ELEVATIONS.slice(1, 8), meridians: [], arcs: [] };
   return { circles: [], meridians: [], arcs: [] };
 }
-function buildGuides() {
-  guideGroup.clear();
+// fade: crossfade from the old guides (button changes); sliders that move
+// the guides continuously rebuild them in place.
+function buildGuides(fade = false) {
+  if (fadingGuides) scene.remove(fadingGuides);
+  fadingGuides = null;
+  const old = guideGroup;
+  guideGroup = new THREE.Group();
+  scene.add(guideGroup);
   const { circles, meridians, arcs } = guideSpec(guides);
   for (const e of circles) guideGroup.add(circleLine(e * DEG, 1.004, 0xffd27a, 0.75));
   for (const a of meridians) guideGroup.add(meridianLine(a * DEG, 1.004, 0xffd27a, 0.75));
@@ -325,6 +360,20 @@ function buildGuides() {
       new THREE.LineBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.75, depthWrite: false }),
     ));
   }
+  if (!fade) {
+    scene.remove(old);
+    return;
+  }
+  fadingGuides = old;
+  const setOpacity = (g, o) => g.children.forEach((l) => { l.material.opacity = o; });
+  setOpacity(guideGroup, 0);
+  animate('guides', 500, (e) => {
+    setOpacity(guideGroup, 0.75 * e);
+    setOpacity(old, 0.75 * (1 - e));
+  }, () => {
+    scene.remove(old);
+    if (fadingGuides === old) fadingGuides = null;
+  });
 }
 
 function textSprite(text, color = '#e6ebf1', size = 0.12) {
@@ -576,40 +625,88 @@ orbit.maxPolarAngle = Math.PI / 2 + 0.35;
 
 const look = { yaw: 0, pitch: 25 * DEG, fov: 80, drag: null };
 
-function setView(v, { yaw } = {}) {
-  view = v;
-  $$('.view-switch [data-view]').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
-  observer.visible = v === 'outside';
-  for (const label of Object.values(etageLabels)) label.visible = v === 'outside';
-  orbit.enabled = v === 'outside';
-  if (v === 'outside') {
-    resetOutside();
-    $('#view-hint').textContent = 'Drag to orbit · scroll to zoom';
-  } else {
-    look.yaw = yaw ?? 0;
-    look.pitch = 25 * DEG;
-    look.fov = 80;
-    $('#view-hint').textContent = 'Drag to look around · scroll to change field of view';
-  }
-  camera.updateProjectionMatrix();
+// The camera flies between views. While it flies, neither the orbit
+// controls nor the inside look-around drive it.
+let camFlying = false;
+
+// Default outside pose per scene: what it looks at, how far out and up the
+// camera sits, its field of view, and its default heading.
+const OUTSIDE = {
+  octas: { target: new THREE.Vector3(0, 0.25, 0), out: 3.19, up: 1.25, fov: 45, heading: Math.atan2(-2.1, 2.4) },
+  layer: { target: new THREE.Vector3(0, 2, 0), out: 11.0, up: 0.6, fov: 60, heading: Math.atan2(-7, 8.5) },
+};
+// heading: compass azimuth (radians) the camera faces
+function cameraHeading() {
+  const f = new THREE.Vector3();
+  camera.getWorldDirection(f);
+  return Math.atan2(f.x, -f.z);
 }
-function resetOutside() {
+function setOrbitLimits() {
   if (mode === 'layer') {
-    // low, looking up: the 100 ft dome in front, the cloud layer above
     orbit.maxDistance = 20000; // far enough to see the whole layer, out to the line of sight
     orbit.maxPolarAngle = Math.PI / 2 - 0.01; // stay above the ground
-    camera.fov = 60;
-    camera.position.set(7, 2.6, 8.5);
-    orbit.target.set(0, 2, 0);
   } else {
     orbit.maxDistance = 7;
     orbit.maxPolarAngle = Math.PI / 2 + 0.35;
-    camera.fov = 45;
-    camera.position.set(2.1, 1.5, 2.4);
-    orbit.target.set(0, 0.25, 0);
   }
-  camera.updateProjectionMatrix();
-  orbit.update();
+}
+function flyTo(pos, target, fov, ms, done) {
+  const p0 = camera.position.clone();
+  const f = new THREE.Vector3();
+  camera.getWorldDirection(f);
+  const t0 = p0.clone().add(f);
+  const fov0 = camera.fov;
+  const at = new THREE.Vector3();
+  camFlying = true;
+  animate('camera', ms, (e) => {
+    camera.position.lerpVectors(p0, pos, e);
+    camera.fov = fov0 + (fov - fov0) * e;
+    camera.updateProjectionMatrix();
+    camera.lookAt(at.lerpVectors(t0, target, e));
+  }, () => {
+    camFlying = false;
+    done?.();
+  });
+}
+
+// opts.reset: go to the default pose instead of keeping the current heading.
+// opts.instant: no flight (used at start-up and behind a fade).
+function setView(v, { yaw, reset = false, instant = false } = {}) {
+  const from = view;
+  view = v;
+  $$('.view-switch [data-view]').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
+  orbit.enabled = false;
+  const ms = instant ? 0 : 1200;
+  // keep facing the same way while moving in or out
+  const heading = yaw ?? (from === 'inside' ? look.yaw : cameraHeading());
+  if (v === 'outside') {
+    setOrbitLimits();
+    observer.visible = true;
+    for (const label of Object.values(etageLabels)) label.visible = true;
+    const o = OUTSIDE[mode === 'layer' ? 'layer' : 'octas'];
+    const h = reset ? o.heading : heading;
+    // stand back from the target, opposite the way we face
+    const pos = o.target.clone().add(new THREE.Vector3(-Math.sin(h) * o.out, o.up, Math.cos(h) * o.out));
+    flyTo(pos, o.target, o.fov, ms, () => {
+      orbit.target.copy(o.target);
+      orbit.enabled = view === 'outside';
+      orbit.update();
+    });
+    $('#view-hint').textContent = 'Drag to orbit · scroll to zoom';
+  } else {
+    look.yaw = heading;
+    look.pitch = 25 * DEG;
+    look.fov = 80;
+    flyTo(new THREE.Vector3(0, 0, 0), dirFromAzEl(look.yaw, look.pitch), look.fov, ms, () => {
+      const inside = view === 'inside';
+      observer.visible = !inside;
+      for (const label of Object.values(etageLabels)) label.visible = !inside;
+    });
+    $('#view-hint').textContent = 'Drag to look around · scroll to change field of view';
+  }
+  // the sky is tinted more strongly from inside
+  const a0 = domeUniforms.skyAlpha.value, a1 = v === 'inside' ? 0.62 : 0.2;
+  animate('sky', ms, (e) => { domeUniforms.skyAlpha.value = a0 + (a1 - a0) * e; });
 }
 
 canvas.addEventListener('pointerdown', (ev) => {
@@ -653,9 +750,8 @@ const SKY = [120, 170, 225];
 const CLOUD = [244, 246, 249];
 
 function paintDome(soft) {
-  const skyAlpha = view === 'inside' ? 0.62 : 0.2;
+  const skyAlpha = view === 'inside' ? 0.62 : 0.2; // for the sky map's copy
   const cloudAlpha = 0.93;
-  domeUniforms.skyAlpha.value = skyAlpha;
   const toHalf = THREE.DataUtils.toHalfFloat;
   const T = soft ? threshold : 0.5;
   domeUniforms.threshold.value = Math.max(-6e4, Math.min(6e4, T));
@@ -835,6 +931,42 @@ function updateLayerPanel() {
 
 // ================================================================ update loop
 
+// Octas and quiz: the amount shown eases toward the chosen one, and a new
+// shape morphs out of the old. Both fields are turned into area ranks (the
+// fraction of the dome less cloudy than each point), blended, and the
+// blend is cut at the chosen amount, so the covered area is exact throughout.
+let octasShown = shapeParams.octas;
+let morph = null; // { from: ranks of the field shown when the morph began, start }
+const shownField = new Float32Array(N);
+const rankB = new Float32Array(N);
+function ranksOf(src, out) {
+  const B = 4096;
+  let lo = Infinity, hi = -Infinity;
+  for (let k = 0; k < N; k++) { const v = src[k]; if (v < lo) lo = v; if (v > hi) hi = v; }
+  const scale = hi > lo ? (B - 1e-6) / (hi - lo) : 0;
+  const hist = new Float64Array(B + 1);
+  for (let k = 0; k < N; k++) hist[Math.floor((src[k] - lo) * scale) + 1] += grid.weight[k];
+  for (let b = 1; b <= B; b++) hist[b] += hist[b - 1];
+  for (let k = 0; k < N; k++) {
+    const x = (src[k] - lo) * scale, b = Math.floor(x);
+    out[k] = hist[b] + (hist[Math.min(B, b + 1)] - hist[b]) * (x - b);
+  }
+  return out;
+}
+function startMorph() {
+  if (REDUCED_MOTION) return;
+  morph = { from: ranksOf(shownField, new Float32Array(N)), start: performance.now() };
+  dirty = true;
+}
+function easeOctasTo(target, ms = 700) {
+  const from = octasShown;
+  animate('octas', ms, (e) => { octasShown = from + (target - from) * e; dirty = true; });
+}
+
+// Cloud layer: the octas and the map-view cover ease too.
+let layerOctasShown = layerParams.octas;
+let coverFrom = null, coverEase = 1;
+
 // Rays start at the observer's eye, 1.7 m above the ground.
 const rayParams = (quick) => ({ ...layerParams, base: layerParams.base - EYE_M, quick });
 
@@ -842,9 +974,11 @@ function recompute() {
   if (mode === 'layer') {
     // the GPU draws the dome; this cast only feeds the numbers and the sky map
     const quick = true;
-    layerParams.cover = layerParams.coverMode === 'dome'
-      ? solvePlanCover(rayParams(quick), layerParams.octas / 8, layerParams.cover)
-      : layerParams.octas / 8;
+    let target = layerParams.coverMode === 'dome'
+      ? solvePlanCover(rayParams(quick), layerOctasShown / 8, layerParams.cover)
+      : layerOctasShown / 8;
+    if (coverFrom !== null) target = coverFrom + (target - coverFrom) * coverEase;
+    layerParams.cover = target;
     layerGeo = castLayer(rayParams(quick), cover);
     let s = 0;
     for (let k = 0; k < N; k++) s += cover[k] * grid.weight[k];
@@ -855,7 +989,16 @@ function recompute() {
   } else {
     const p = mode === 'quiz' ? quizParams : shapeParams;
     computeField({ ...p, noise: noiseFor(p.seed) }, field);
-    threshold = solveThreshold(field, p.octas / 8);
+    if (morph) {
+      const t = Math.min(1, (performance.now() - morph.start) / 900);
+      const e = easeInOut(t);
+      ranksOf(field, rankB);
+      for (let k = 0; k < N; k++) field[k] = morph.from[k] + (rankB[k] - morph.from[k]) * e;
+      if (t >= 1) morph = null;
+      else dirty = true; // keep morphing next frame
+    }
+    shownField.set(field);
+    threshold = solveThreshold(field, octasShown / 8);
     coveredFrac = coverFromField(field, threshold, cover);
     paintDome(true);
     updateCloudMeshes();
@@ -875,6 +1018,7 @@ function frame(now) {
     shapeParams.time += dt * 0.6;
     dirty = true;
   }
+  runTweens(now);
   if (baseTween) {
     const t = Math.min(1, (now - baseTween.start) / baseTween.duration);
     const ease = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
@@ -883,7 +1027,10 @@ function frame(now) {
     }
     if (t >= 1) {
       // a sheet's pattern depends on its patch size, so that changes once, at the end
-      if (baseTween.sizeAtEnd) layerCtl.size.set(baseTween.sizeAtEnd);
+      if (baseTween.sizeAtEnd) {
+        const size = baseTween.sizeAtEnd;
+        swapLayer(() => layerCtl.size.set(size));
+      }
       baseTween = null;
     }
     layerCtl.base.sync();
@@ -894,8 +1041,10 @@ function frame(now) {
     dirty = false;
     recompute();
   }
-  if (view === 'inside') updateInsideCamera();
-  else orbit.update();
+  if (!camFlying) {
+    if (view === 'inside') updateInsideCamera();
+    else orbit.update();
+  }
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
@@ -917,7 +1066,12 @@ function bindRange(id, obj, key, fmt, after) {
   return { input, sync, set: (v) => { obj[key] = v; input.value = v; sync(); } };
 }
 
-const octasCtl = bindRange('octas', shapeParams, 'octas', (v) => (Number.isInteger(v) ? v : v.toFixed(2)), () => syncChips());
+const octasCtl = bindRange('octas', shapeParams, 'octas', (v) => (Number.isInteger(v) ? v : v.toFixed(2)), () => {
+  // dragging is already smooth: follow the slider directly
+  tweens.delete('octas');
+  octasShown = shapeParams.octas;
+  syncChips();
+});
 bindRange('azimuth', shapeParams, 'azimuth', (v) => `${v}°`, () => {
   if (guides === 'lying') buildGuides();
 });
@@ -925,7 +1079,7 @@ bindRange('centre', shapeParams, 'centerElevation', (v) => `${v}°`);
 bindRange('axis', shapeParams, 'axisElevation', (v) => `${v}°`, () => {
   if (guides === 'lying') buildGuides();
 });
-bindRange('clumps', shapeParams, 'clumps', (v) => v);
+bindRange('clumps', shapeParams, 'clumps', (v) => v, startMorph);
 bindRange('deform', shapeParams, 'deform', (v) => (v === 0 ? 'none' : v.toFixed(2)));
 bindRange('scale', shapeParams, 'scale', (v) => (v < 2.5 ? 'large' : v < 5 ? 'medium' : 'small'));
 
@@ -933,7 +1087,7 @@ const chips = $('#octa-chips');
 for (let k = 0; k <= 8; k++) {
   const b = document.createElement('button');
   b.textContent = k;
-  b.addEventListener('click', () => { octasCtl.set(k); syncChips(); dirty = true; });
+  b.addEventListener('click', () => { octasCtl.set(k); syncChips(); easeOctasTo(k); });
   chips.append(b);
 }
 function syncChips() {
@@ -962,10 +1116,12 @@ function syncShape() {
 function setGuides(g) {
   guides = g;
   $$('#guides button').forEach((x) => x.classList.toggle('on', x.dataset.guides === g));
-  buildGuides();
+  buildGuides(true);
   drawSkyMap();
 }
 $$('#shape button').forEach((b) => b.addEventListener('click', () => {
+  if (b.dataset.shape === shapeParams.shape) return;
+  startMorph();
   shapeParams.shape = b.dataset.shape;
   syncShape();
   // show the matching slice outlines when switching between the two oranges
@@ -977,6 +1133,7 @@ syncShape();
 
 $('#animate').addEventListener('change', (e) => { shapeParams.animate = e.target.checked; });
 $('#reseed').addEventListener('click', () => {
+  startMorph();
   shapeParams.seed = 1 + Math.floor(Math.random() * 1e6);
   if (shapeParams.deform === 0 && shapeParams.shape !== 'patchy') $('#deform').value = shapeParams.deform = 0.4;
   $('#deform').dispatchEvent(new Event('input'));
@@ -1036,15 +1193,30 @@ for (let k = 0; k <= 8; k++) {
   b.addEventListener('click', () => {
     layerParams.octas = k;
     syncLayerChips();
-    dirty = true;
+    const from = layerOctasShown;
+    animate('layerOctas', 700, (e) => { layerOctasShown = from + (k - from) * e; dirty = true; });
   });
   lchips.append(b);
 }
 $$('#lcover-mode button').forEach((b) => b.addEventListener('click', () => {
+  if (b.dataset.cmode === layerParams.coverMode) return;
   layerParams.coverMode = b.dataset.cmode;
   syncLayerChips();
-  dirty = true;
+  // ease from the current cover to the one the new mode asks for
+  coverFrom = layerParams.cover;
+  animate('cover', 700, (e) => { coverEase = e; dirty = true; }, () => { coverFrom = null; });
 }));
+
+// Swap the layer for a different one (form, random pattern): the clouds fade
+// out, the change is made, and they fade back in.
+function swapLayer(change) {
+  const f0 = patternUniforms.layerFade.value;
+  animate('layerFade', 250 * f0, (e) => { patternUniforms.layerFade.value = f0 * (1 - e); }, () => {
+    change();
+    dirty = true;
+    animate('layerFade', 350, (e) => { patternUniforms.layerFade.value = e; });
+  });
+}
 function syncLayerChips() {
   const cumuliform = layerParams.form === 'cumuliform';
   [...lchips.children].forEach((b, k) => {
@@ -1062,7 +1234,7 @@ $$('#units button').forEach((b) => b.addEventListener('click', () => {
   layerCtl.base.sync();
 }));
 $('#lshow').addEventListener('change', (e) => { layerParams.showClouds = e.target.checked; dirty = true; });
-$('#lreseed').addEventListener('click', () => { layerParams.seed = 1 + Math.floor(Math.random() * 1e6); dirty = true; });
+$('#lreseed').addEventListener('click', () => swapLayer(() => { layerParams.seed = 1 + Math.floor(Math.random() * 1e6); }));
 
 // Typical layer for each étage and form (base in ft, size in m).
 const LAYER_DEFAULTS = {
@@ -1105,7 +1277,10 @@ function syncLayerForm() {
   $('#lsize-label').textContent = form === 'stratiform' ? 'Size of patches and gaps' : 'Cloud spacing';
   const [smin, smax, sstep] = SIZE_M[form];
   Object.assign(layerCtl.size.input, { min: smin, max: smax, step: sstep });
-  if (form === 'cumuliform' && layerParams.octas === 8) layerParams.octas = 7;
+  if (form === 'cumuliform' && layerParams.octas === 8) {
+    layerParams.octas = 7;
+    animate('layerOctas', 700, (e) => { layerOctasShown = 8 - e; dirty = true; });
+  }
   syncLayerChips();
   dirty = true;
 }
@@ -1132,8 +1307,12 @@ $$('#etage button').forEach((b) => b.addEventListener('click', () => {
 }));
 $$('#form button').forEach((b) => b.addEventListener('click', () => {
   if (b.dataset.form === layerParams.form) return;
-  layerParams.form = b.dataset.form;
-  applyFormDefaults();
+  // update the buttons now; the clouds change once they have faded out
+  $$('#form button').forEach((x) => x.classList.toggle('on', x === b));
+  swapLayer(() => {
+    layerParams.form = b.dataset.form;
+    applyFormDefaults();
+  });
 }));
 applyFormDefaults();
 
@@ -1170,6 +1349,8 @@ function newQuiz() {
     time: 0,
     seed: 1 + Math.floor(rnd() * 1e6),
   };
+  startMorph();
+  easeOctasTo(frac * 8, 900);
   quiz.answered = false;
   [...answers.children].forEach((b) => { b.disabled = false; b.className = ''; });
   $('#quiz-result').textContent = '';
@@ -1202,37 +1383,61 @@ $('#quiz-new').addEventListener('click', newQuiz);
 
 // ---------------------------------------------------------------- tabs, view
 
+const canvasFade = (o) => { canvas.style.opacity = o; };
 $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
   const tab = b.dataset.tab;
   $$('.tabs button').forEach((x) => x.classList.toggle('on', x === b));
   $$('.tab').forEach((s) => { s.hidden = s.id !== `tab-${tab}`; });
   const prev = mode;
-  if (tab === 'octas' || tab === 'layer') mode = tab;
-  if (tab === 'quiz') {
-    mode = 'quiz';
-    if (!quizParams) newQuiz();
-  }
-  if (mode !== 'quiz') $('.skymap').classList.remove('hidden');
-  if (mode === 'quiz' && !quiz.answered) $('.skymap').classList.toggle('hidden', $('#quiz-hidemap').checked);
-  if (prev !== mode) {
+  let next = mode; // the Notes tab keeps whatever is showing
+  if (tab === 'octas' || tab === 'layer' || tab === 'quiz') next = tab;
+  const syncMap = () => {
+    const hide = mode === 'quiz' && !quiz.answered && $('#quiz-hidemap').checked;
+    $('.skymap').classList.toggle('hidden', hide);
+  };
+  if (next === prev) return;
+  if ((prev === 'layer') === (next === 'layer')) {
+    // octas <-> quiz: same scene, so the sky morphs from one to the other
+    startMorph();
+    mode = next;
+    if (mode === 'quiz' && !quizParams) newQuiz();
+    else easeOctasTo(mode === 'quiz' ? quizParams.octas : shapeParams.octas);
+    syncMap();
     dirty = true;
-    if (view === 'outside' && (prev === 'layer' || mode === 'layer')) resetOutside();
+    return;
   }
+  // to or from the cloud layer: a different scene and scale, so fade through
+  canvasFade(0);
+  setTimeout(() => {
+    mode = next;
+    if (mode === 'quiz' && !quizParams) newQuiz();
+    octasShown = mode === 'quiz' ? quizParams.octas : shapeParams.octas;
+    morph = null;
+    tweens.delete('octas');
+    if (view === 'outside') setView('outside', { reset: true, instant: true });
+    recompute();
+    syncMap();
+    canvasFade(1);
+  }, REDUCED_MOTION ? 0 : 250);
 }));
 
 $$('.view-switch [data-view]').forEach((b) => b.addEventListener('click', () => {
-  setView(b.dataset.view);
-  dirty = true; // sky tint differs inside vs outside
+  if (b.dataset.view !== view) setView(b.dataset.view);
 }));
-$('#reset-view').addEventListener('click', () => { setView(view); dirty = true; });
+$('#reset-view').addEventListener('click', () => setView(view, { reset: true }));
 
 $('#skymap-proj').addEventListener('click', () => {
   mapProjection = mapProjection === 'equal-area' ? 'fisheye' : 'equal-area';
   $('#skymap-title').textContent = mapProjection === 'equal-area'
     ? 'All-sky map, equal-area' : 'All-sky map, fisheye (equidistant)';
   $('#skymap-proj').textContent = mapProjection === 'equal-area' ? 'switch to fisheye' : 'switch to equal-area';
-  mapLookup = null;
-  drawSkyMap();
+  // crossfade the map through its change of projection
+  mapCanvas.style.opacity = 0;
+  setTimeout(() => {
+    mapLookup = null;
+    drawSkyMap();
+    mapCanvas.style.opacity = 1;
+  }, REDUCED_MOTION ? 0 : 180);
 });
 
 // notes: equal-area band table
@@ -1242,6 +1447,6 @@ $('#band-table').innerHTML = OCTA_BAND_ELEVATIONS.slice(1)
 // ================================================================ go
 
 buildGuides();
-setView('outside');
+setView('outside', { reset: true, instant: true });
 resize();
 requestAnimationFrame(frame);
