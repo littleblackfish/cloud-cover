@@ -353,11 +353,12 @@
         <h3>About this tool</h3>
         <p class="help">
           Coverage is computed on a 0.5° grid with true solid-angle weights,
-          so the numbers are exact to about 0.1%. In the Octas tab, every
-          deformation keeps the covered area fixed: the shape's outline is
-          the contour that encloses exactly the chosen area. The cloud-layer
-          model uses flat-topped cylinders on a jittered lattice, which is
-          simpler than real clouds but enough to show the geometry.
+          so the numbers are exact to about 0.1%. In both tabs, cloudiness is
+          the shape plus the modifier's texture, and the cloud is the contour
+          that encloses exactly the chosen area, so changing the shape, the
+          modifier or the layer's height never changes the amount. The cloud
+          layer is flat: its cumuli and strati are simple random textures,
+          enough to show the geometry rather than real cloud structure.
         </p>
       </section>
     </aside>
