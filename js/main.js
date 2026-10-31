@@ -665,6 +665,7 @@ const solidUniforms = {
   lumpM: { value: 200 },
   lumpAmp: { value: 0.1 }, // how far the lumps push the surface (of the radius)
   sheet: { value: 0 }, // 1 for a sheet (stratocumulus), see the shader
+  wispy: { value: 0 }, // 1 for see-through shreds (stratus fractus)
 };
 const solidMaterial = new THREE.ShaderMaterial({
   uniforms: solidUniforms,
@@ -712,7 +713,7 @@ const solidMaterial = new THREE.ShaderMaterial({
   fragmentShader: `
     #include <logdepthbuf_pars_fragment>
     uniform vec3 litCol, shadeCol, baseCol, hazeCol, sunDir;
-    uniform float metresPerUnit, fade, bumpM, sheet;
+    uniform float metresPerUnit, fade, bumpM, sheet, wispy;
     varying vec3 vN, vW;
     varying float vBase, vTop;
     // value noise, for the lumpy (cauliflower) surface
@@ -738,7 +739,7 @@ const solidMaterial = new THREE.ShaderMaterial({
         vec3 n = normalize(vN);
         // cauliflower lumps, fading out where they get too small on screen
         vec3 bp = vW * metresPerUnit / bumpM;
-        float keep = 1.0 - smoothstep(0.25, 0.8, length(fwidth(bp)));
+        float keep = (1.0 - wispy) * (1.0 - smoothstep(0.25, 0.8, length(fwidth(bp))));
         vec3 bmp = bumps(bp);
         n = normalize(n + 1.3 * keep * bmp);
         // wrapped diffuse light, so sunlit sides keep their modelling; the
@@ -753,7 +754,11 @@ const solidMaterial = new THREE.ShaderMaterial({
       }
       float dist = length(vW) * metresPerUnit;
       c = mix(c, hazeCol, 0.7 * smoothstep(8000.0, 120000.0, dist));
-      gl_FragColor = vec4(c, fade);
+      // wispy (stratus fractus): thin where seen edge-on, so the sky shows
+      // through the edges of each shred
+      float facing = abs(dot(normalize(vN), normalize(cameraPosition - vW)));
+      float alpha = mix(1.0, 0.08 + 0.8 * smoothstep(0.05, 0.7, facing), wispy);
+      gl_FragColor = vec4(c, fade * alpha);
       #include <colorspace_fragment>
     }`,
 });
@@ -816,6 +821,10 @@ function updateSolidMeshes(show) {
   solidUniforms.sheet.value = TYPES[type]?.meshNear?.sheet ? 1 : 0;
   // fractus: torn outlines
   solidUniforms.lumpAmp.value = TYPES[type]?.meshNear?.ragged ? 0.32 : 0.1;
+  const wispy = !!TYPES[type]?.meshNear?.shreds;
+  solidUniforms.wispy.value = wispy ? 1 : 0;
+  // see-through shreds blend over one another instead of hiding each other
+  if (solidMaterial.depthWrite === wispy) { solidMaterial.depthWrite = !wispy; solidMaterial.needsUpdate = true; }
   solidUniforms.bumpM.value = R0 * 0.09;
   solidUniforms.lumpM.value = R0 * 0.3;
 }
@@ -876,6 +885,17 @@ function sheetSpheres(L, T) {
           const sz = (0.35 + 0.45 * r3) * grow;
           const ox = (r1 - 0.5) * 0.9 * g.across, oy = (r2 - 0.5) * 0.9 * g.along;
           const bv = rv * (0.6 + 0.6 * r3);
+          if (g.shreds) {
+            // a shred: long and thin, at its own height (up to a quarter of
+            // the base height above or below it), not cut flat
+            const z = up + (r1 - 0.5) * 0.5 * h + bv;
+            list.push({
+              e: x + ox * ux + oy * vx, n: y + ox * uy + oy * vy, up: z,
+              rh: g.across * sz, rh2: g.along * sz * (0.8 + 0.8 * r2), rv: bv,
+              base: z - 2 * bv, top: z + bv, detail: true, rot: -ang + 0.3 * (r3 - 0.5),
+            });
+            continue;
+          }
           list.push({
             e: x + ox * ux + oy * vx, n: y + ox * uy + oy * vy, up: up + 0.5 * bv + 0.4 * rv * r1,
             rh: g.across * sz, rh2: g.along * sz, rv: bv, base: up, top, detail: true, rot: -ang,
@@ -929,7 +949,7 @@ const SOLID_LOOK = {
   AC: { lit: [246, 248, 251], shade: [198, 204, 214], base: [168, 175, 186] },
   ACC: { lit: [246, 248, 251], shade: [192, 198, 209], base: [160, 167, 179] },
   CF: { lit: [250, 251, 253], shade: [200, 206, 216], base: [160, 167, 178] },
-  SF: { lit: [214, 218, 224], shade: [160, 166, 176], base: [132, 138, 148] },
+  SF: { lit: [168, 173, 181], shade: [146, 151, 160], base: [126, 131, 140] },
 };
 
 // Point the shared layer uniforms at the current layer.

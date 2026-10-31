@@ -181,7 +181,8 @@ const mixRGB = (a, b, t) => a.map((v, i) => Math.round(lerp(v, b[i], t)));
 //   solid    drawn as solid shapes instead: cumulus.js
 //   meshNear drawn as solid shapes near the observer, the pattern beyond:
 //            grid spacing across and along the pattern, thickness (m), R0
-//            (lump size), turrets, ragged (broken into small blobs), sheet
+//            (lump size), turrets, ragged (broken into small blobs), shreds
+//            (thin, see-through, at uneven heights), sheet
 //            (lit as a sheet: only the tops in the sun)
 export const TYPES = {
   CI: {
@@ -311,9 +312,9 @@ export const TYPES = {
     name: 'Stratus fractus', etage: 'low', baseFt: 800, baseRangeFt: [100, 1500],
     tileM: 2500, featureM: 90, amount: 2.0, blotch: 0.3, soft: 0.02,
     opacity: 0.85, grey: [184, 188, 195], shade: 0.25, angle: 25, res: 512,
-    // near the observer: ragged clusters of small, thin blobs, drawn out
-    // along the wind
-    meshNear: { across: 70, along: 150, thick: 45, R0: 90, ragged: true, sheet: true },
+    // near the observer: thin, torn, see-through shreds drawn out along the
+    // wind, at uneven heights (no common flat base, unlike stratocumulus)
+    meshNear: { across: 55, along: 240, thick: 22, R0: 90, ragged: true, sheet: true, shreds: true },
     help: 'Ragged stratus. Base near the surface to 1,500 ft.',
     gen(u, v, s) {
       const [a, b] = warp(u, v, 8, 0.9, s);
