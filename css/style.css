@@ -98,14 +98,14 @@ body {
   position: absolute; top: 12px; left: 12px;
   display: flex; gap: 6px; flex-wrap: wrap;
 }
-.view-switch button, .seg button, .chips button, .row button {
+.view-switch button, .seg button, .chips button, .type-chips button, .row button {
   font: inherit; font-size: 13px;
   border: 1px solid var(--line);
   background: var(--chip); color: var(--ink);
   padding: 5px 10px; border-radius: 6px; cursor: pointer;
 }
 .view-switch button { background: rgba(20, 28, 40, .75); color: #dfe6ee; border-color: rgba(255,255,255,.15); }
-.view-switch button.on, .seg button.on, .chips button.on {
+.view-switch button.on, .seg button.on, .chips button.on, .type-chips button.on {
   background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
 }
 .view-switch button.on { background: #5b9bff; color: #0d1117; }
@@ -288,3 +288,13 @@ code { font-size: 12.5px; background: var(--chip); padding: 1px 4px; border-radi
 /* explanatory notes sit at the very bottom of each tab's controls */
 .notes-bottom { margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--line); }
 .form-ends .off { opacity: 0.35; text-decoration: line-through; }
+
+/* cloud types, one row per étage */
+.types { display: grid; gap: 4px; }
+.type-row { display: grid; grid-template-columns: 34px 1fr; align-items: center; gap: 6px; }
+.type-etage { font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .04em; }
+.type-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.type-chips button { min-width: 44px; font-variant-numeric: tabular-nums; }
+.type-chips button:disabled { opacity: .4; cursor: not-allowed; }
+#type-help { margin: 8px 0 0; min-height: 3.6em; }
+.seg button:disabled { opacity: .4; cursor: not-allowed; }

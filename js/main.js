@@ -5,7 +5,8 @@ import {
   reportedOctas, makeNoise3, mulberry32, vertSliceFrame, vertSliceCentre, patchCentre,
 } from './sky.js';
 import {
-  layerField, layerArea, bakeTexture, EARTH_R, ELEMENT_R, TILE, CELLS, DECODE_GLSL,
+  layerField, layerArea, bakeType, bakeBlotches, prebake, TYPES, TYPE_ROWS,
+  BLOTCH_SCALE, BLOTCH_ANGLE, EARTH_R, DECODE_GLSL,
 } from './layer.js';
 
 const DEG = Math.PI / 180;
@@ -28,12 +29,11 @@ function setForm(p, v) {
   p.modifier = v < 0 ? 'cumuli' : v > 0 ? 'strati' : 'none';
   p.amount = Math.abs(v);
 }
-// The cloud layer: one round patch on a flat layer, broken up by a texture
-// that lives on the layer (form, shared with the Celestial dome tab).
+// The cloud layer: one round patch on a flat layer, plain or drawn as one of
+// the cloud types (layer.js TYPES), whose pattern lives on the layer.
 const layerParams = {
   etage: 'low', shape: 'cap', azimuth: 270, elevation: 25, // round patch only
-  form: 0, modifier: 'none', amount: 0, octas: 1,
-  base: 4000 * FT, size: 1000, seed: 1,
+  type: 'plain', octas: 1, base: 4000 * FT, seed: 1,
 };
 let quizParams = null;
 const quiz = { answered: false, right: 0, total: 0, streak: 0 };
@@ -131,37 +131,53 @@ function domeGeometry(segA = 192, segE = 64) {
 //
 // The cloud layer is drawn per pixel on the GPU, on the dome and on the 3D
 // layer alike, from the same fields the CPU uses for the octa numbers (see
-// layer.js; the hash and noise below copy layer.js and sky.js exactly).
-// Cloudiness = shape field for the line of sight + amount x the texture where
-// that line of sight meets the layer; cloud where it exceeds layerT.
-// The cumuli and strati textures are baked once into a repeating tile
-// (layer.js bakeTexture) and sampled with mipmaps: one lookup per pixel.
-const cloudTex = new THREE.DataTexture(new Uint8Array(TILE * TILE), TILE, TILE, THREE.RedFormat, THREE.UnsignedByteType);
-cloudTex.wrapS = cloudTex.wrapT = THREE.RepeatWrapping;
-cloudTex.magFilter = THREE.LinearFilter;
-cloudTex.minFilter = THREE.LinearMipmapLinearFilter;
-cloudTex.generateMipmaps = true;
-cloudTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+// layer.js). Cloudiness = the patch's field for the line of sight + the cloud
+// type's pattern where that line of sight meets the layer; cloud where it
+// exceeds layerT. The patterns are baked once into repeating tiles
+// (layer.js bakeType, bakeBlotches) and sampled with mipmaps: two lookups
+// per pixel.
+function tileTexture(size, format) {
+  const ch = format === THREE.RGFormat ? 2 : 1;
+  const t = new THREE.DataTexture(new Uint8Array(size * size * ch), size, size, format, THREE.UnsignedByteType);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.magFilter = THREE.LinearFilter;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.generateMipmaps = true;
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return t;
+}
+const cloudTex = tileTexture(512, THREE.RGFormat); // every type's tile is 512 square
 let cloudTexKey = null;
+const blotchTex = tileTexture(256, THREE.RedFormat);
+let blotchSeed = null;
 const layerUniforms = {
   shapeKind: { value: 0 }, // 0 horizontal slice, 1 vertical slice, 2 round patch
-  modKind: { value: 1 }, // 0 none, 1 cumuli, 2 strati
-  seed: { value: 1 },
+  typeOn: { value: 0 }, // 0 a plain patch, 1 drawn as a cloud type
   shapeAz: { value: 0 },
   sliceCentre: { value: 0 },
   capDir: { value: new THREE.Vector3(0, 0, 1) }, // east, north, up
-  texSize: { value: 1500 },
-  amount: { value: 0.7 },
+  // the type (layer.js TYPES)
+  tileM: { value: 10000 },
+  featureM: { value: 500 },
+  amount: { value: 0 },
+  blotch: { value: 0 },
+  soft: { value: 0 },
+  texAngle: { value: 0 },
   layerT: { value: 0 },
   layerHeight: { value: 1200 }, // cloud base above the eye, m
-  layerFade: { value: 1 }, // fades the clouds out and in when the layer is swapped
+  layerFade: { value: 1 }, // fades the clouds out and in when the type changes
+  opacity: { value: 1 },
+  shadeAmt: { value: 0 },
+  wisp: { value: 0 },
   cloudTex: { value: cloudTex },
+  blotchTex: { value: blotchTex },
 };
 const LAYER_GLSL = `
-  uniform int shapeKind, modKind, seed;
-  uniform float shapeAz, sliceCentre, texSize, amount, layerT, layerHeight, layerFade;
+  uniform int shapeKind, typeOn;
+  uniform float shapeAz, sliceCentre, layerT, layerHeight, layerFade;
+  uniform float tileM, featureM, amount, blotch, soft, texAngle, opacity, shadeAmt, wisp;
   uniform vec3 capDir;
-  uniform sampler2D cloudTex;
+  uniform sampler2D cloudTex, blotchTex;
   const float LPI = 3.141592653589793;
 
   // sky.js shapeField, for a unit sky direction s = (east, north, up)
@@ -177,27 +193,41 @@ const LAYER_GLSL = `
     return -acos(clamp(dot(s, capDir), -1.0, 1.0));
   }
 
-  // layer.js sampleTexture: the baked tile repeats every CELLS lattice spacings
-  float layerTex(vec2 p) {
-    float t = texture2D(cloudTex, p / (texSize * ${CELLS.toFixed(1)})).r;
-    return ${DECODE_GLSL};
+  // layer.js layerField: the pattern's own frame on the layer, and its two tiles
+  vec2 patternFrame(vec2 g) {
+    float c = cos(texAngle), s = sin(texAngle);
+    return vec2(c * g.x - s * g.y, s * g.x + c * g.y);
+  }
+  float blotches(vec2 q) {
+    const float c = ${Math.cos(BLOTCH_ANGLE * DEG).toFixed(6)}, s = ${Math.sin(BLOTCH_ANGLE * DEG).toFixed(6)};
+    float t = texture2D(blotchTex, vec2(c * q.x - s * q.y, s * q.x + c * q.y) / (tileM * ${BLOTCH_SCALE.toFixed(3)})).r;
+    return ${DECODE_GLSL('t')};
   }
 
-  // Cloud amount (0..1). r, rw: the shape field here and its change across a
-  // pixel. g: where the line of sight meets the layer; ddx, ddy: how far g
-  // moves across one pixel. The texture's mipmaps average it over the pixel;
-  // where even the pixel's short axis outgrows the texture's features it
-  // gives way to the expected cover.
+  // Cloud amount (0..1). r, rw: the patch's field here and its change across
+  // a pixel. g: where the line of sight meets the layer; ddx, ddy: how far g
+  // moves across one pixel. The tiles' mipmaps average the pattern over the
+  // pixel; where even the pixel's short axis outgrows the pattern's features
+  // it gives way to the cover expected there.
   float layerCloud(float r, float rw, vec2 g, vec2 ddx, vec2 ddy) {
-    if (modKind == 0) return smoothstep(layerT - rw, layerT + rw, r) * layerFade;
-    float feature = modKind == 1 ? 2.0 * ${ELEMENT_R.toFixed(3)} * texSize : 0.5 * texSize;
+    if (typeOn == 0) return smoothstep(layerT - rw, layerT + rw, r) * layerFade;
+    vec2 q = patternFrame(g);
+    float t = texture2D(cloudTex, q / tileM).r;
+    float base = r + blotch * blotches(q);
     float minor = max(min(length(ddx), length(ddy)), 1e-3);
-    float k = smoothstep(0.3, 1.0, minor / feature);
-    float w = rw + 1.5 * amount * minor / feature;
-    float c = smoothstep(layerT - w, layerT + w, r + amount * layerTex(g));
-    float expected = smoothstep(layerT - amount, layerT + amount, r);
+    float k = smoothstep(0.3, 1.0, minor / featureM);
+    float w = rw + soft + 1.5 * amount * minor / featureM;
+    float c = smoothstep(layerT - w, layerT + w, base + amount * ${DECODE_GLSL('t')});
+    float expected = smoothstep(layerT - amount - soft, layerT + amount + soft, base);
     return mix(c, expected, k) * layerFade;
   }
+  // How thick the cloud is here, 0..1: thick parts are drawn darker, and
+  // thin parts of fibrous veils let the sky through (wisp).
+  float layerShade(vec2 g) {
+    if (typeOn == 0) return 0.0;
+    return texture2D(cloudTex, patternFrame(g) / tileM).g;
+  }
+  float layerAlpha(float shade) { return opacity * (1.0 - wisp * (1.0 - shade)); }
 `;
 
 // The dome is shaded from the cloudiness field itself (half-float texture,
@@ -253,7 +283,7 @@ const dome = new THREE.Mesh(
       ${LAYER_GLSL}
       void main() {
         #include <logdepthbuf_fragment>
-        float a;
+        float a, shade = 0.0;
         if (layerOn == 1) {
           // Follow this pixel's line of sight out to the (curved) cloud layer.
           vec3 n = normalize(vDir);
@@ -264,13 +294,15 @@ const dome = new THREE.Mesh(
           vec2 g = s.xy / hl * dist;
           vec2 gx = dFdx(g), gy = dFdy(g);
           float r = region(s), rw = fwidth(r);
-          a = s.z < 0.0 ? 0.0 : projection * layerCloud(r, rw, g, gx, gy);
+          float th = layerShade(g);
+          a = s.z < 0.0 ? 0.0 : projection * layerAlpha(th) * layerCloud(r, rw, g, gx, gy);
+          shade = shadeAmt * th;
         } else {
           float f = texture2D(field, vUv).r;
           float w = max(fwidth(f), 1e-5);
           a = smoothstep(threshold - w, threshold + w, f);
         }
-        gl_FragColor = vec4(mix(skyColor, cloudColor, a), mix(skyAlpha, cloudAlpha, a));
+        gl_FragColor = vec4(mix(skyColor, cloudColor * (1.0 - shade), a), mix(skyAlpha, cloudAlpha, a));
         #include <colorspace_fragment>
       }`,
   }),
@@ -534,7 +566,9 @@ const SURFACE_FRAG = `
     float dist = length(vec3(vGround, layerHeight));
     float far = smoothstep(1.0, 4.0, dist / metresPerUnit);
     float beyond = smoothstep(0.92, 1.08, dist / farM);
-    gl_FragColor = vec4(color * mix(1.0, 0.6, far), mix(mix(0.95, 0.75, far), 0.1, beyond) * a);
+    float th = layerShade(vGround);
+    vec3 c = color * (1.0 - shadeAmt * th);
+    gl_FragColor = vec4(c * mix(1.0, 0.6, far), mix(mix(0.95, 0.75, far), 0.1, beyond) * a * layerAlpha(th));
     #include <colorspace_fragment>
   }`;
 const layerSurface = new THREE.Mesh(
@@ -558,27 +592,48 @@ scene.add(layerSurface);
 
 // Point the shared layer uniforms at the current layer.
 let layerThreshold = 0;
+const flatType = (code) => !!TYPES[code] && TYPES[code].flat !== false;
+const layerTint = () => (flatType(layerParams.type) ? TYPES[layerParams.type].grey : tintFor(layerParams.base));
 function updatePattern() {
   const p = layerParams;
   const U = layerUniforms;
   U.shapeKind.value = { slice: 0, lying: 1, cap: 2 }[p.shape];
-  U.modKind.value = { none: 0, cumuli: 1, strati: 2 }[p.modifier];
-  U.seed.value = p.seed;
   U.shapeAz.value = p.azimuth * DEG;
   U.sliceCentre.value = vertSliceCentre(layerOctasShown, p.elevation);
   const [a, e] = patchCentre(p.azimuth, p.elevation);
   U.capDir.value.set(Math.sin(a) * Math.cos(e), Math.cos(a) * Math.cos(e), Math.sin(e));
-  U.texSize.value = p.size;
-  U.amount.value = p.amount;
   U.layerT.value = Math.max(-1e4, Math.min(1e4, layerThreshold));
   U.layerHeight.value = Math.max(1, p.base - EYE_M);
-  const key = `${p.modifier}:${p.seed}`;
-  if (p.modifier !== 'none' && cloudTexKey !== key) {
-    cloudTex.image.data.set(bakeTexture(p.modifier, p.seed));
-    cloudTex.needsUpdate = true;
-    cloudTexKey = key;
+  const t = TYPES[p.type];
+  const on = flatType(p.type);
+  U.typeOn.value = on ? 1 : 0;
+  if (on) {
+    U.tileM.value = t.tileM;
+    U.featureM.value = t.featureM;
+    U.amount.value = t.amount;
+    U.blotch.value = t.blotch;
+    U.soft.value = t.soft;
+    U.texAngle.value = t.angle * DEG;
+    U.opacity.value = t.opacity;
+    U.shadeAmt.value = t.shade;
+    U.wisp.value = t.wisp ?? 0;
+    const key = `${p.type}:${p.seed}`;
+    if (cloudTexKey !== key) {
+      cloudTex.image.data.set(bakeType(p.type, p.seed).data);
+      cloudTex.needsUpdate = true;
+      cloudTexKey = key;
+    }
+    if (blotchSeed !== p.seed) {
+      blotchTex.image.data.set(bakeBlotches(p.seed).data);
+      blotchTex.needsUpdate = true;
+      blotchSeed = p.seed;
+    }
+  } else {
+    U.opacity.value = 1;
+    U.shadeAmt.value = 0;
+    U.wisp.value = 0;
   }
-  const tint = tintFor(p.base);
+  const tint = layerTint();
   domeUniforms.cloudColor.value.setRGB(tint[0] / 255, tint[1] / 255, tint[2] / 255, THREE.SRGBColorSpace);
   layerSurface.material.uniforms.color.value.setRGB(tint[0] / 255, tint[1] / 255, tint[2] / 255, THREE.SRGBColorSpace);
 }
@@ -856,7 +911,7 @@ const SKY = [120, 170, 225];
 const CLOUD = [244, 246, 249];
 
 function paintDome(soft) {
-  const cc = mode === 'layer' ? tintFor(layerParams.base) : CLOUD;
+  const cc = mode === 'layer' ? layerTint() : CLOUD;
   const skyAlpha = view === 'inside' ? 0.62 : 0.2; // for the sky map's copy
   const cloudAlpha = 0.93;
   const toHalf = THREE.DataUtils.toHalfFloat;
@@ -1269,8 +1324,6 @@ const layerCtl = {
   base: bindHeight('lbase', 'base'),
   azimuth: bindRange('laz', layerParams, 'azimuth', (v) => `${v}°`),
   centre: bindRange('lcentre', layerParams, 'elevation', (v) => `${v}°`),
-  // no cumuliform clouds in the high étage
-  form: bindForm('lform', layerParams, undefined, () => (layerParams.etage === 'high' ? 0 : -Infinity)),
 };
 // Coverage seen on the dome, in whole octas.
 const lchips = $('#lcover-chips');
@@ -1307,26 +1360,92 @@ function syncLayerControls() {
   const { etage } = layerParams;
   $$('#etage button').forEach((b) => b.classList.toggle('on', b.dataset.etage === etage));
   $('#genus').textContent = GENUS[etage];
-  $('#lform-cumuli').classList.toggle('off', etage === 'high');
+  const t = TYPES[layerParams.type];
+  $$('#etage button').forEach((b) => { b.disabled = !!t && !t.etages.includes(b.dataset.etage); });
+  $$('#ltypes button').forEach((b) => b.classList.toggle('on', b.dataset.type === layerParams.type));
+  $('#ltype-out').textContent = t ? `${layerParams.type} · ${t.name}` : 'plain patch';
+  $('#type-help').textContent = t ? t.help
+    : 'A plain round patch: pick a cloud type to see how it looks from the ground.';
   layerCtl.base.sync();
   syncLayerChips();
   dirty = true;
 }
-$$('#etage button').forEach((b) => b.addEventListener('click', () => {
-  if (b.dataset.etage === layerParams.etage) return;
-  layerParams.etage = b.dataset.etage;
-  // the layer glides to a typical base for the new étage; the octas stay
-  const to = { base: ETAGE_BASE_FT[layerParams.etage] * FT };
-  baseTween = { from: { base: layerParams.base }, to, start: performance.now(), duration: 1500 };
-  // the outside view reframes for the new étage alongside
-  const s0 = viewScaleWanted, s1 = layerViewScale();
-  animate('viewScale', 1500, (e) => { viewScaleWanted = s0 + (s1 - s0) * e; });
-  if (layerParams.etage === 'high' && layerParams.form < 0) {
-    const f0 = layerParams.form;
-    animate('lform', 900, (e) => { layerCtl.form.set(f0 * (1 - e)); dirty = true; });
+// The layer glides to a new base; the octas stay. Changing étage also
+// reframes the outside view alongside.
+function glideBase(etage, ft) {
+  const [lo, hi] = ETAGES[etage].base;
+  const changed = etage !== layerParams.etage;
+  layerParams.etage = etage;
+  const to = { base: Math.min(hi, Math.max(lo, ft)) * FT };
+  baseTween = { from: { base: layerParams.base }, to, start: performance.now(), duration: REDUCED_MOTION ? 1 : 1500 };
+  if (changed) {
+    const s0 = viewScaleWanted, s1 = layerViewScale();
+    animate('viewScale', 1500, (e) => { viewScaleWanted = s0 + (s1 - s0) * e; });
   }
   syncLayerControls();
+}
+$$('#etage button').forEach((b) => b.addEventListener('click', () => {
+  if (b.dataset.etage === layerParams.etage) return;
+  glideBase(b.dataset.etage, ETAGE_BASE_FT[b.dataset.etage]);
 }));
+
+// Cloud types, by étage. Picking one fades the old pattern out and the new
+// one in, and moves the layer to the type's usual base and étage (some, like
+// nimbostratus, can then be moved to another).
+const typeBox = $('#ltypes');
+const typeButton = (code, label, title) => {
+  const b = document.createElement('button');
+  b.dataset.type = code;
+  b.innerHTML = label;
+  b.title = title;
+  b.addEventListener('click', () => setType(code));
+  return b;
+};
+{
+  const row = document.createElement('div');
+  row.className = 'type-row';
+  row.innerHTML = '<span class="type-etage"></span>';
+  const chips = document.createElement('div');
+  chips.className = 'type-chips';
+  chips.append(typeButton('plain', 'Plain patch', 'A plain round patch'));
+  row.append(chips);
+  typeBox.append(row);
+}
+for (const [etage, codes] of TYPE_ROWS) {
+  const row = document.createElement('div');
+  row.className = 'type-row';
+  row.innerHTML = `<span class="type-etage">${ETAGES[etage].name}</span>`;
+  const chips = document.createElement('div');
+  chips.className = 'type-chips';
+  for (const code of codes) {
+    const t = TYPES[code];
+    const b = typeButton(code, code, t.name);
+    if (t.flat === false) {
+      b.disabled = true;
+      b.title = `${t.name}: needs height to draw, coming next`;
+    }
+    chips.append(b);
+  }
+  row.append(chips);
+  typeBox.append(row);
+}
+function setType(code) {
+  if (code === layerParams.type) return;
+  const t = TYPES[code];
+  if (t) glideBase(t.etage, t.baseFt);
+  animate('typeFade', 250, (e) => { layerUniforms.layerFade.value = 1 - e; }, () => {
+    layerParams.type = code;
+    syncLayerControls();
+    dirty = true;
+    animate('typeFade', 350, (e) => { layerUniforms.layerFade.value = e; });
+  });
+}
+// Bake every type's pattern in the background, so picking one is instant.
+setTimeout(() => {
+  const idle = window.requestIdleCallback ?? ((f) => setTimeout(f, 50));
+  prebake(layerParams.seed, idle);
+  bakeBlotches(layerParams.seed);
+}, 1500);
 syncLayerControls();
 
 // ---------------------------------------------------------------- quiz
@@ -1420,12 +1539,10 @@ $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
   if (next === 'layer') {
     layerCtl.azimuth.set(shapeParams.azimuth);
     layerCtl.centre.set(shapeParams.elevation);
-    layerCtl.form.set(layerParams.etage === 'high' ? Math.max(0, shapeParams.form) : shapeParams.form);
     syncLayerControls();
   } else if (next === 'octas' && prev === 'layer') {
     domeCtl.azimuth.set(layerParams.azimuth);
     domeCtl.elevation.set(layerParams.elevation);
-    domeCtl.form.set(layerParams.form);
   }
   if ((prev === 'layer') === (next === 'layer')) {
     // octas <-> quiz: same scene, so the sky morphs from one to the other
