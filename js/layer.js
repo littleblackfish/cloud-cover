@@ -148,11 +148,17 @@ function cells(u, v, nx, ny, seed, occupied, radius) {
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
 
 // ---------------------------------------------------------------- cloud types
+const lerp = (a, b, t) => a + (b - a) * clamp01(t);
+const mixRGB = (a, b, t) => a.map((v, i) => Math.round(lerp(v, b[i], t)));
 //
-// The types reported in Canadian METARs (MANOBS). Sizes are real sizes on the
-// layer, chosen so that at the type's usual base the elements look the size
-// the cloud atlas gives, seen more than 30 degrees up: cirrocumulus grains
-// under 1 degree across, altocumulus 1 to 5, stratocumulus over 5.
+// The types reported in Canadian METARs. Bases and descriptions follow MANOBS
+// (8th edition) table 7-1. Sizes are real sizes on the layer, chosen so that
+// at the type's usual base the elements look the width MANOBS gives at arm's
+// length: cirrocumulus under one finger, altocumulus one to three, and
+// stratocumulus more than three.
+//
+//   baseFt, baseRangeFt  usual base and MANOBS range (ft)
+//   vary     how the look changes with the base (ft), as MANOBS describes
 //
 //   tileM    the tile's size on the layer (m)
 //   featureM the pattern's typical feature (m): where pixels outgrow it, the
@@ -168,10 +174,10 @@ const clamp01 = (x) => Math.min(1, Math.max(0, x));
 //   flat     false: needs height to draw properly (towering types), not yet
 export const TYPES = {
   CI: {
-    name: 'Cirrus', etage: 'high', etages: ['high'], baseFt: 28000,
+    name: 'Cirrus', etage: 'high', baseFt: 29000, baseRangeFt: [20000, 39000],
     tileM: 36000, featureM: 700, amount: 1.1, blotch: 0.45, soft: 0.1,
     opacity: 0.85, wisp: 0.9, grey: [248, 249, 252], shade: 0.04, angle: 35, res: 512,
-    help: 'Cirrus (CI): detached white filaments, fibrous or silky, often hooked or in streaks. Thin: the sky shows through.',
+    help: 'Cirrus (CI): detached white, delicate filaments, white patches or narrow bands, fibrous (hair-like) or with a silky sheen. Base 20,000–39,000 ft; on average 29,000 ft in summer, 26,000 ft in winter, and 32,000 ft if very thin.',
     gen(u, v, s) {
       // detached tufts, stretched along the wind and gently bent; inside
       // them, fine parallel fibres decide how much sky shows through
@@ -182,10 +188,10 @@ export const TYPES = {
     },
   },
   CC: {
-    name: 'Cirrocumulus', etage: 'high', etages: ['high'], baseFt: 25000,
+    name: 'Cirrocumulus', etage: 'high', baseFt: 29000, baseRangeFt: [20000, 39000],
     tileM: 7000, featureM: 95, amount: 1.0, blotch: 0.6, soft: 0.01,
     opacity: 0.85, grey: [244, 246, 249], shade: 0.12, angle: 15, res: 512,
-    help: 'Cirrocumulus (CC): a thin white sheet of very small grains or ripples, without shading, each under 1° across (smaller than your little finger at arm’s length).',
+    help: 'Cirrocumulus (CC): a thin white patch, sheet or layer without shading, of very small grains or ripples, more or less regularly arranged; most elements narrower than one finger at arm’s length. Base 20,000–39,000 ft; on average 29,000 ft in summer, 26,000 ft in winter.',
     gen(u, v, s) {
       const [a, b] = warp(u, v, 9, 0.25, s);
       const e = cells(a, b, 72, 56, s, 0.86, 0.48);
@@ -193,19 +199,24 @@ export const TYPES = {
     },
   },
   CS: {
-    name: 'Cirrostratus', etage: 'high', etages: ['high'], baseFt: 26000,
+    name: 'Cirrostratus', etage: 'high', baseFt: 26000, baseRangeFt: [20000, 39000],
     tileM: 40000, featureM: 6000, amount: 0.08, blotch: 0.1, soft: 0.15,
     opacity: 0.4, wisp: 0.5, grey: [246, 248, 251], shade: 0.05, angle: 30, res: 512,
-    help: 'Cirrostratus (CS): a transparent whitish veil, fibrous or smooth, often over most of the sky. The sun shines through it and it may make a halo.',
+    help: 'Cirrostratus (CS): a transparent whitish veil, fibrous or smooth, covering all or part of the sky, and generally producing halos. Base 20,000–39,000 ft, more often near the low end: about 20,000 ft in winter, 26,000 ft in summer.',
     gen(u, v, s) {
       return [0.5 * fbm(u, v, 2, 2, 3, s), clamp01(0.5 + 0.6 * fbm(u, v, 3, 24, 4, s + 7))];
     },
   },
   AC: {
-    name: 'Altocumulus', etage: 'mid', etages: ['mid'], baseFt: 12000,
+    name: 'Altocumulus', etage: 'mid', baseFt: 16000, baseRangeFt: [6500, 20000],
     tileM: 9000, featureM: 220, amount: 0.9, blotch: 0.5, soft: 0.015,
     opacity: 0.93, grey: [218, 222, 229], shade: 0.35, angle: 20, res: 512,
-    help: 'Altocumulus (AC): white or grey rounded masses or rolls with shading, in sheets or patches, each 1° to 5° across (about one to three fingers at arm’s length).',
+    // small elements with little shading near 16,000 ft, darker lower
+    vary: (ft) => {
+      const t = (ft - 7000) / 9000;
+      return { grey: mixRGB([204, 208, 215], [228, 231, 236], t), shade: lerp(0.45, 0.12, t) };
+    },
+    help: 'Altocumulus (AC): a white or grey patch, sheet or layer, generally shaded, of laminae, rounded masses or rolls; most elements one to three fingers wide at arm’s length. Base 6,500–20,000 ft: small elements with little shading usually near 16,000 ft, larger and darker elements lower.',
     gen(u, v, s) {
       const [a, b] = warp(u, v, 10, 0.45, s);
       const e = cells(a, b, 40, 28, s, 0.92, 0.55);
@@ -213,32 +224,39 @@ export const TYPES = {
     },
   },
   ACC: {
-    name: 'Altocumulus castellanus', etage: 'mid', etages: ['mid'], baseFt: 12000, flat: false,
-    help: 'Altocumulus castellanus (ACC): altocumulus with turrets rising from a common base. Needs height to draw: coming next.',
+    name: 'Altocumulus castellanus', etage: 'mid', baseFt: 16000, baseRangeFt: [6500, 20000], flat: false,
+    help: 'Altocumulus castellanus (ACC): altocumulus with cumuliform turrets, some taller than wide, on a common base and arranged in lines. Base 6,500–20,000 ft. Needs height to draw: coming next.',
   },
   AS: {
-    name: 'Altostratus', etage: 'mid', etages: ['mid'], baseFt: 10000,
+    name: 'Altostratus', etage: 'mid', baseFt: 8000, baseRangeFt: [6500, 20000],
     tileM: 40000, featureM: 6000, amount: 0.1, blotch: 0.2, soft: 0.08,
     opacity: 0.9, wisp: 0.15, grey: [178, 184, 194], shade: 0.15, angle: 30, res: 512,
-    help: 'Altostratus (AS): a grey or bluish sheet, streaky or uniform, over much of the sky. The sun shows dimly, as through ground glass, and there is no halo.',
+    // thick near 8,000 ft, thinner (sun shows) higher
+    vary: (ft) => {
+      const t = (ft - 8000) / 12000;
+      return { opacity: lerp(0.95, 0.72, t), wisp: lerp(0.1, 0.35, t), grey: mixRGB([172, 178, 188], [196, 202, 212], t) };
+    },
+    help: 'Altostratus (AS): a greyish or bluish sheet, striated, fibrous or uniform, with parts thin enough to show the sun vaguely, as through ground glass; no halo. Base 6,500–20,000 ft: about 8,000 ft when no sun or moon shows through, thin layers higher.',
     gen(u, v, s) {
       return [0.5 * fbm(u, v, 2, 2, 3, s), clamp01(0.5 + 0.6 * fbm(u, v, 2, 16, 4, s + 5))];
     },
   },
   NS: {
-    name: 'Nimbostratus', etage: 'low', etages: ['low', 'mid'], baseFt: 2500,
+    name: 'Nimbostratus', etage: 'low', baseFt: 2500, baseRangeFt: [100, 6500],
     tileM: 30000, featureM: 5000, amount: 0.12, blotch: 0.15, soft: 0.12,
     opacity: 0.98, grey: [140, 145, 152], shade: 0.2, angle: 0, res: 512,
-    help: 'Nimbostratus (NS): a thick, dark grey layer, made diffuse by falling rain or snow, that hides the sun completely. A mid-level cloud in the atlas, but its base is usually low.',
+    // the darker, the lower
+    vary: (ft) => ({ grey: mixRGB([116, 121, 128], [160, 165, 172], (ft - 1000) / 5500) }),
+    help: 'Nimbostratus (NS): a grey, often dark layer, made diffuse by more or less continuous rain or snow, thick enough throughout to blot out the sun. Base near the surface to 6,500 ft: usually the darker, the lower. Stratus fractus often forms in the precipitation below it.',
     gen(u, v, s) {
       return [0.5 * fbm(u, v, 2, 2, 4, s), clamp01(0.5 + 0.6 * fbm(u, v, 6, 6, 4, s + 3))];
     },
   },
   SC: {
-    name: 'Stratocumulus', etage: 'low', etages: ['low'], baseFt: 3500,
+    name: 'Stratocumulus', etage: 'low', baseFt: 3500, baseRangeFt: [500, 6500],
     tileM: 10000, featureM: 700, amount: 0.55, blotch: 0.4, soft: 0.03,
     opacity: 0.95, grey: [205, 209, 215], shade: 0.35, angle: 20, res: 512,
-    help: 'Stratocumulus (SC): grey or whitish patches, sheets or rolls with dark parts, usually joined. Each element over 5° across (more than three fingers at arm’s length).',
+    help: 'Stratocumulus (SC): a grey or whitish patch, sheet or layer, almost always with dark parts, of tessellations, rounded masses or rolls, not fibrous; most elements wider than three fingers at arm’s length. Base 500–6,500 ft: below 1,000 ft few rolls and large elements, and more rolls and smaller elements the higher the base.',
     gen(u, v, s) {
       const [a, b] = warp(u, v, 6, 0.25, s);
       const e = cells(a, b, 14, 9, s, 0.97, 0.78);
@@ -246,33 +264,33 @@ export const TYPES = {
     },
   },
   ST: {
-    name: 'Stratus', etage: 'low', etages: ['low'], baseFt: 1000,
+    name: 'Stratus', etage: 'low', baseFt: 800, baseRangeFt: [100, 1500],
     tileM: 8000, featureM: 700, amount: 0.12, blotch: 0.15, soft: 0.05,
     opacity: 0.92, grey: [196, 200, 206], shade: 0.15, angle: 0, res: 512,
-    help: 'Stratus (ST): a generally grey layer with a fairly uniform base, often low. The sun’s outline is clear through thin stratus.',
+    help: 'Stratus (ST): a generally grey layer with a fairly uniform base, which may give drizzle or snow grains. When the sun shows through, its outline is clear. Base near the surface to 1,500 ft, usually below 1,000 ft.',
     gen(u, v, s) {
       return [0.7 * fbm(u, v, 3, 3, 4, s), clamp01(0.5 + 0.6 * fbm(u, v, 12, 12, 3, s + 9))];
     },
   },
   SF: {
-    name: 'Stratus fractus', etage: 'low', etages: ['low'], baseFt: 800,
+    name: 'Stratus fractus', etage: 'low', baseFt: 800, baseRangeFt: [100, 1500],
     tileM: 2500, featureM: 90, amount: 2.0, blotch: 0.3, soft: 0.02,
     opacity: 0.85, grey: [184, 188, 195], shade: 0.25, angle: 25, res: 512,
-    help: 'Stratus fractus (SF): ragged grey shreds of stratus, often low under rain clouds, changing shape quickly.',
+    help: 'Stratus fractus (SF): ragged stratus. Base near the surface to 1,500 ft; it often forms in the precipitation below nimbostratus.',
     gen(u, v, s) {
       const [a, b] = warp(u, v, 8, 0.9, s);
       return [1.2 * fbm(a, b, 10, 5, 4, s), clamp01(0.5 + 0.6 * fbm(a, b, 20, 20, 3, s + 4))];
     },
   },
   CU: {
-    name: 'Cumulus', etage: 'low', etages: ['low'], baseFt: 4000, flat: false,
-    help: 'Cumulus (CU): detached, dense heaps with flat bases and sharp, bulging tops. Needs height to draw: coming next.',
+    name: 'Cumulus', etage: 'low', baseFt: 4000, baseRangeFt: [1500, 10000], flat: false,
+    help: 'Cumulus (CU): detached, generally dense clouds with sharp outlines, rising in mounds, domes or towers like a cauliflower; dazzling white in the sun, with dark, almost flat bases. Base usually 1,500–6,500 ft, up to 10,000 ft or higher in very dry summer air. Needs height to draw: coming next.',
   },
   CF: {
-    name: 'Cumulus fractus', etage: 'low', etages: ['low'], baseFt: 2000,
+    name: 'Cumulus fractus', etage: 'low', baseFt: 2500, baseRangeFt: [1500, 10000],
     tileM: 4000, featureM: 300, amount: 1.2, blotch: 0.3, soft: 0.02,
     opacity: 0.9, grey: [222, 226, 231], shade: 0.3, angle: 0, res: 512,
-    help: 'Cumulus fractus (CF): small ragged cumulus fragments with torn edges, changing quickly; often the first or last stage of cumulus.',
+    help: 'Cumulus fractus (CF): ragged cumulus. Base usually 1,500–6,500 ft, up to 10,000 ft or higher in very dry summer air.',
     gen(u, v, s) {
       const [a, b] = warp(u, v, 8, 0.45, s);
       const e = cells(a, b, 10, 10, s, 0.55, 0.5);
@@ -280,12 +298,12 @@ export const TYPES = {
     },
   },
   TCU: {
-    name: 'Towering cumulus', etage: 'low', etages: ['low'], baseFt: 4000, flat: false,
-    help: 'Towering cumulus (TCU): cumulus grown much taller than wide, with cauliflower tops. Needs height to draw: coming next.',
+    name: 'Towering cumulus', etage: 'low', baseFt: 4000, baseRangeFt: [1500, 10000], flat: false,
+    help: 'Towering cumulus (TCU): strongly sprouting cumulus with sharp outlines and often great vertical extent, its top like a cauliflower; sides white in the sun, base dark, flat and almost horizontal overhead. Base usually 1,500–6,500 ft, up to 10,000 ft or higher. Needs height to draw: coming next.',
   },
   CB: {
-    name: 'Cumulonimbus', etage: 'low', etages: ['low'], baseFt: 3000, flat: false,
-    help: 'Cumulonimbus (CB): a heavy, dense thunder cloud of great height, its top often spread into an anvil. Needs height to draw: coming next.',
+    name: 'Cumulonimbus', etage: 'low', baseFt: 3500, baseRangeFt: [1500, 10000], flat: false,
+    help: 'Cumulonimbus (CB): a heavy, dense cloud of great vertical extent, like a mountain or huge tower, its top often flattened and spread into an anvil; under its often very dark base, ragged low clouds and precipitation. Base usually 1,500–6,500 ft, up to 10,000 ft or higher. Needs height to draw: coming next.',
   },
 };
 export const TYPE_ROWS = [

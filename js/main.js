@@ -522,7 +522,7 @@ function tintFor(baseM) {
   return ETAGE_TINT.high;
 }
 const ETAGES = {
-  low: { name: 'Low', base: [300, 6500], band: [0, 6500] },
+  low: { name: 'Low', base: [100, 6500], band: [0, 6500] },
   mid: { name: 'Mid', base: [6600, 19000], band: [6500, 20000] },
   high: { name: 'High', base: [20000, 40000], band: [20000, 45000] },
 };
@@ -587,7 +587,9 @@ scene.add(layerSurface);
 // Point the shared layer uniforms at the current layer.
 let layerThreshold = 0;
 const flatType = (code) => !!TYPES[code] && TYPES[code].flat !== false;
-const layerTint = () => (flatType(layerParams.type) ? TYPES[layerParams.type].grey : tintFor(layerParams.base));
+// The type's look at the current base (some types change with it).
+const typeLook = (code, baseM) => ({ ...TYPES[code], ...TYPES[code].vary?.(baseM / FT) });
+const layerTint = () => (flatType(layerParams.type) ? typeLook(layerParams.type, layerParams.base).grey : tintFor(layerParams.base));
 function updatePattern() {
   const p = layerParams;
   const U = layerUniforms;
@@ -598,8 +600,8 @@ function updatePattern() {
   U.capDir.value.set(Math.sin(a) * Math.cos(e), Math.cos(a) * Math.cos(e), Math.sin(e));
   U.layerT.value = Math.max(-1e4, Math.min(1e4, layerThreshold));
   U.layerHeight.value = Math.max(1, p.base - EYE_M);
-  const t = TYPES[p.type];
   const on = flatType(p.type);
+  const t = on ? typeLook(p.type, p.base) : null;
   U.typeOn.value = on ? 1 : 0;
   if (on) {
     U.tileM.value = t.tileM;
@@ -1047,11 +1049,13 @@ function updateReadout() {
         (as a circle, ${fmtKm(2 * Math.sqrt(patchArea / Math.PI))} across)</div>`
     : '';
   el.innerHTML = `<div class="dim">Report</div>
-    <div class="big">${rep} / 8</div>
+    <div class="big">${rep} / 8 <span class="term">${skyTerm(rep)}</span></div>
     <div>${fmtOctas(coveredFrac)} octas exactly</div>
     <div class="dim">${(coveredFrac * 100).toFixed(1)}% of the dome</div>${size}`;
 }
 let patchArea = 0;
+// MANOBS table 7-2: the amount term for a layer's summation amount
+const skyTerm = (octas) => (octas === 0 ? 'SKC' : octas <= 2 ? 'FEW' : octas <= 4 ? 'SCT' : octas < 8 ? 'BKN' : 'OVC');
 const fmtArea = (m2) => {
   const km2 = m2 / 1e6;
   return `${km2 >= 100 ? Math.round(km2).toLocaleString('en-CA') : km2 >= 10 ? km2.toFixed(0) : km2.toFixed(1)} km²`;
@@ -1246,8 +1250,20 @@ $$('#guides button').forEach((b) => b.addEventListener('click', () => setGuides(
 // Cloud base height is shown in feet or metres; everything is
 // stored in metres. Horizontal distances stay metric.
 let heightUnit = 'ft';
+// The base range (ft): the étage's, narrowed to the type's (MANOBS).
+function baseRangeFt(etage, type) {
+  let [lo, hi] = ETAGES[etage].base;
+  const r = TYPES[type]?.baseRangeFt;
+  if (r) { lo = Math.max(lo, r[0]); hi = Math.min(hi, r[1]); }
+  return [lo, hi];
+}
+// The étages a type's base range reaches into.
+const typeEtages = (type) => Object.keys(ETAGES).filter((e) => {
+  const [lo, hi] = baseRangeFt(e, type);
+  return hi > lo;
+});
 const heightRange = () => {
-  const [lo, hi] = ETAGES[layerParams.etage].base;
+  const [lo, hi] = baseRangeFt(layerParams.etage, layerParams.type);
   return heightUnit === 'ft'
     ? [lo, hi, 100]
     : [Math.ceil((lo * FT) / 10) * 10, Math.floor((hi * FT) / 10) * 10, 10];
@@ -1317,7 +1333,8 @@ function syncLayerControls() {
   $$('#etage button').forEach((b) => b.classList.toggle('on', b.dataset.etage === etage));
   $('#genus').textContent = GENUS[etage];
   const t = TYPES[layerParams.type];
-  $$('#etage button').forEach((b) => { b.disabled = !!t && !t.etages.includes(b.dataset.etage); });
+  const reach = typeEtages(layerParams.type);
+  $$('#etage button').forEach((b) => { b.disabled = !reach.includes(b.dataset.etage); });
   $$('#ltypes button').forEach((b) => b.classList.toggle('on', b.dataset.type === layerParams.type));
   $('#ltype-out').textContent = t ? `${layerParams.type} · ${t.name}` : 'plain patch';
   $('#type-help').textContent = t ? t.help
@@ -1328,8 +1345,8 @@ function syncLayerControls() {
 }
 // The layer glides to a new base; the octas stay. Changing étage also
 // reframes the outside view alongside.
-function glideBase(etage, ft) {
-  const [lo, hi] = ETAGES[etage].base;
+function glideBase(etage, ft, type = layerParams.type) {
+  const [lo, hi] = baseRangeFt(etage, type);
   const changed = etage !== layerParams.etage;
   layerParams.etage = etage;
   const to = { base: Math.min(hi, Math.max(lo, ft)) * FT };
@@ -1388,7 +1405,7 @@ for (const [etage, codes] of TYPE_ROWS) {
 function setType(code) {
   if (code === layerParams.type) return;
   const t = TYPES[code];
-  if (t) glideBase(t.etage, t.baseFt);
+  if (t) glideBase(t.etage, t.baseFt, code);
   animate('typeFade', 250, (e) => { layerUniforms.layerFade.value = 1 - e; }, () => {
     layerParams.type = code;
     syncLayerControls();
