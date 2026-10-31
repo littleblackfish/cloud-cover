@@ -31,8 +31,13 @@ and is hosted on GitHub Pages without a build step.
   1.7 m up, a dome whose radius is the distance to their horizon (4.65 km),
   the ground inside it, and the layer drawn out to the observer's line of
   sight. Each type has its own grey; a plain patch takes its étage's.
-- **Quiz tab:** random plain slices and patches to estimate from inside the dome, scored using
-  the octa rounding rules; the outside view and sky map open after answering.
+- **Quiz tab:** a random sky of one cloud type (any of the drawable types)
+  at a base around its usual one, covering a random, usually fractional,
+  amount. You start inside, looking straight up with the whole sky in view
+  and no guides. Answer the amount (and optionally the type); the answer is
+  scored with the octa rounding rules and shown with its amount term, base
+  and sky condition group (e.g. `BKN035`). The guides, outside view and sky
+  map open after answering.
 
 ## The key geometry
 

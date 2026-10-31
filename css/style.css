@@ -260,3 +260,14 @@ code { font-size: 12.5px; background: var(--chip); padding: 1px 4px; border-radi
 .type-chips button:disabled { opacity: .4; cursor: not-allowed; }
 #type-help { margin: 8px 0 0; min-height: 3.6em; }
 .readout .big .term { font-size: 0.6em; font-weight: 600; margin-left: 6px; letter-spacing: .04em; opacity: .85; }
+
+/* quiz: type answers, marked like the amount answers once checked */
+.quiz-types button.right { background: var(--good); border-color: var(--good); color: #fff; }
+.quiz-types button.wrong { background: var(--bad); border-color: var(--bad); color: #fff; }
+.quiz-types button:disabled:not(.right):not(.wrong) { opacity: .4; }
+.chips.answer button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.field > span small.dim { font-weight: 400; color: var(--ink-3); }
+#quiz-check:disabled { opacity: .45; cursor: not-allowed; }
+.quiz-result code { font-size: 14px; font-weight: 650; }
+.chips button.right:disabled, .chips button.wrong:disabled,
+.type-chips button.right:disabled, .type-chips button.wrong:disabled { opacity: 1; cursor: default; }

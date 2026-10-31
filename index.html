@@ -164,15 +164,28 @@
         <div class="row">
           <button id="quiz-new" class="primary">New sky</button>
         </div>
-        <div class="chips answer" id="quiz-answers"></div>
+        <div class="field">
+          <span>Amount (octas)</span>
+          <div class="chips answer" id="quiz-answers"></div>
+        </div>
+        <div class="field">
+          <span>Cloud type <small class="dim">optional</small></span>
+          <div class="type-chips quiz-types" id="quiz-types"></div>
+        </div>
+        <div class="row">
+          <button id="quiz-check" class="primary" disabled>Check</button>
+        </div>
         <p class="quiz-result" id="quiz-result" aria-live="polite"></p>
         <p class="score" id="quiz-score"></p>
 
         <div class="notes-bottom">
           <p class="help">
-            A random sky is drawn around you, as you would see it in the
-            field. Estimate the amount, then check. The outside view and the
-            sky map open once you have answered.
+            A random sky: one layer of one cloud type, at a typical base for
+            that type. You stand under it looking straight up, with the
+            whole sky in view; drag to look around, scroll to change the
+            field of view. Estimate the amount, and the type if you like,
+            then check. The guides, the outside view and the sky map open
+            once you have answered.
           </p>
         </div>
       </section>

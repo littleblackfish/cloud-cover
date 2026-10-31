@@ -29,8 +29,10 @@ const layerParams = {
   etage: 'low', shape: 'cap', azimuth: 270, elevation: 60, // round patch only
   type: 'plain', octas: 1, base: 4000 * FT, seed: 1,
 };
-let quizParams = null;
-const quiz = { answered: false, right: 0, total: 0, streak: 0 };
+// The quiz draws its own random cloud layer, so the Cloud layer tab keeps
+// its settings.
+let quizLayer = null;
+const quiz = { answered: false, right: 0, total: 0, typeRight: 0, typeTotal: 0, streak: 0 };
 
 let mode = 'octas'; // 'octas' | 'layer' | 'quiz'
 let view = 'outside';
@@ -576,13 +578,21 @@ let layerThreshold = 0;
 const flatType = (code) => !!TYPES[code] && TYPES[code].flat !== false;
 // The type's look at the current base (some types change with it).
 const typeLook = (code, baseM) => ({ ...TYPES[code], ...TYPES[code].vary?.(baseM / FT) });
-const layerTint = () => (flatType(layerParams.type) ? typeLook(layerParams.type, layerParams.base).grey : tintFor(layerParams.base));
+// The quiz and the Cloud layer tab both show a cloud layer: the quiz's own,
+// or the tab's.
+const layerScene = () => mode === 'layer' || mode === 'quiz';
+const activeLayer = () => (mode === 'quiz' && quizLayer ? quizLayer : layerParams);
+const shownLayerOctas = () => (mode === 'quiz' ? octasShown : layerOctasShown);
+const layerTint = () => {
+  const L = activeLayer();
+  return flatType(L.type) ? typeLook(L.type, L.base).grey : tintFor(L.base);
+};
 function updatePattern() {
-  const p = layerParams;
+  const p = activeLayer();
   const U = layerUniforms;
   U.shapeKind.value = { slice: 0, lying: 1, cap: 2 }[p.shape];
   U.shapeAz.value = p.azimuth * DEG;
-  U.sliceCentre.value = vertSliceCentre(layerOctasShown, p.elevation);
+  U.sliceCentre.value = vertSliceCentre(shownLayerOctas(), p.elevation);
   const [a, e] = patchCentre(p.azimuth, p.elevation);
   U.capDir.value.set(Math.sin(a) * Math.cos(e), Math.cos(a) * Math.cos(e), Math.sin(e));
   U.layerT.value = Math.max(-1e4, Math.min(1e4, layerThreshold));
@@ -622,7 +632,7 @@ function updatePattern() {
 }
 
 function updateCloudMeshes() {
-  const on = mode === 'layer';
+  const on = layerScene();
   domeUniforms.layerOn.value = on ? 1 : 0;
   if (!on) domeUniforms.cloudColor.value.setRGB(CLOUD[0] / 255, CLOUD[1] / 255, CLOUD[2] / 255, THREE.SRGBColorSpace);
   // The observer's eye is the dome's centre: the figure (to scale, its eye
@@ -632,14 +642,14 @@ function updateCloudMeshes() {
   layerSurface.visible = false;
   if (!on) return;
   updatePattern();
-  const reach = sightRange(layerParams.base);
+  const reach = sightRange(activeLayer().base);
   // rebuild the curved disc only when its size changes noticeably
   if (Math.abs(layerSurface.userData.radius - reach) > reach * 0.01) {
     layerSurface.geometry.dispose();
     layerSurface.geometry = curvedDisc(reach * K, 192, 64);
     layerSurface.userData.radius = reach;
   }
-  layerSurface.position.y = GROUND_Y + layerParams.base * K;
+  layerSurface.position.y = GROUND_Y + activeLayer().base * K;
   layerSurface.visible = true;
 }
 
@@ -676,7 +686,7 @@ const OUTSIDE = {
 // (0.3 dome radii); a higher étage scales the whole framing up, so its clouds
 // stay in view. The framing follows the étage's typical base, not the base
 // slider, so moving the base within an étage never moves the camera.
-const layerViewScale = () => Math.max(1, (ETAGE_BASE_FT[layerParams.etage] * FT * K) / 0.3);
+const layerViewScale = () => Math.max(1, (ETAGE_BASE_FT[activeLayer().etage] * FT * K) / 0.3);
 let viewScaleShown = 1; // the scale the camera is framed for
 let viewScaleWanted = 1; // eases to the new étage's scale
 // heading: compass azimuth (radians) the camera faces
@@ -688,7 +698,7 @@ function cameraHeading() {
 function setOrbitLimits() {
   // far enough to see the whole layer out to the line of sight, or the
   // planet around the dome
-  orbit.maxDistance = mode === 'layer' ? 150 : 40;
+  orbit.maxDistance = layerScene() ? 150 : 40;
 }
 function flyTo(pos, target, fov, ms, done) {
   needsRender = true; // an instant move still has to be drawn
@@ -712,7 +722,7 @@ function flyTo(pos, target, fov, ms, done) {
 
 // opts.reset: go to the default pose instead of keeping the current heading.
 // opts.instant: no flight (used at start-up and behind a fade).
-function setView(v, { yaw, reset = false, instant = false } = {}) {
+function setView(v, { yaw, pitch = 25 * DEG, fov = 80, reset = false, instant = false } = {}) {
   const from = view;
   view = v;
   $$('.view-switch [data-view]').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
@@ -723,9 +733,9 @@ function setView(v, { yaw, reset = false, instant = false } = {}) {
   if (v === 'outside') {
     setOrbitLimits();
     setObserverVisible(true);
-    const o = OUTSIDE[mode === 'layer' ? 'layer' : 'octas'];
+    const o = OUTSIDE[layerScene() ? 'layer' : 'octas'];
     const h = reset ? o.heading : heading;
-    const sc = mode === 'layer' ? layerViewScale() : 1;
+    const sc = layerScene() ? layerViewScale() : 1;
     viewScaleShown = sc;
     viewScaleWanted = sc;
     tweens.delete('viewScale');
@@ -740,8 +750,8 @@ function setView(v, { yaw, reset = false, instant = false } = {}) {
     $('#view-hint').textContent = 'Drag to orbit · scroll to zoom';
   } else {
     look.yaw = heading;
-    look.pitch = 25 * DEG;
-    look.fov = 80;
+    look.pitch = pitch;
+    look.fov = fov;
     flyTo(new THREE.Vector3(0, 0, 0), dirFromAzEl(look.yaw, look.pitch), look.fov, ms, () => {
       const inside = view === 'inside';
       setObserverVisible(!inside);
@@ -765,8 +775,8 @@ function setView(v, { yaw, reset = false, instant = false } = {}) {
 // reframe it for the new scene's scale.
 function keepOutsideAngle() {
   const dir = camera.position.clone().sub(orbit.target).normalize();
-  const o = OUTSIDE[mode === 'layer' ? 'layer' : 'octas'];
-  const sc = mode === 'layer' ? layerViewScale() : 1;
+  const o = OUTSIDE[layerScene() ? 'layer' : 'octas'];
+  const sc = layerScene() ? layerViewScale() : 1;
   viewScaleShown = viewScaleWanted = sc;
   tweens.delete('viewScale');
   setOrbitLimits();
@@ -894,7 +904,7 @@ const SKY = [120, 170, 225];
 const CLOUD = [244, 246, 249];
 
 function paintDome(soft) {
-  const cc = mode === 'layer' ? layerTint() : CLOUD;
+  const cc = layerScene() ? layerTint() : CLOUD;
   const skyAlpha = view === 'inside' ? 0.62 : 0.2; // for the sky map's copy
   const cloudAlpha = 0.93;
   const toHalf = THREE.DataUtils.toHalfFloat;
@@ -1031,7 +1041,7 @@ function updateReadout() {
   const rep = reportedOctas(coveredFrac);
   // On the cloud layer, also the cloud's real size: the same octas take a
   // bigger cloud the higher the layer is.
-  const size = mode === 'layer' && patchArea > 0
+  const size = layerScene() && patchArea > 0
     ? `<div class="dim">cloud on the layer: ${fmtArea(patchArea)}
         (as a circle, ${fmtKm(2 * Math.sqrt(patchArea / Math.PI))} across)</div>`
     : '';
@@ -1087,21 +1097,20 @@ function easeOctasTo(target, ms = 700) {
 let layerOctasShown = layerParams.octas;
 
 function recompute() {
-  if (mode === 'layer') {
-    followEtage();
+  if (layerScene()) {
+    if (mode === 'layer') followEtage();
+    const L = activeLayer();
     // The GPU draws the layer; the same field here gives the threshold for
     // the chosen octas, the numbers and the sky map. Lines of sight start at
     // the observer's eye, 1.7 m above the ground.
-    layerField({
-      ...layerParams, octas: layerOctasShown, height: Math.max(1, layerParams.base - EYE_M),
-    }, field);
-    layerThreshold = solveThreshold(field, layerOctasShown / 8);
+    layerField({ ...L, octas: shownLayerOctas(), height: Math.max(1, L.base - EYE_M) }, field);
+    layerThreshold = solveThreshold(field, shownLayerOctas() / 8);
     coveredFrac = coverFromField(field, layerThreshold, cover);
-    patchArea = layerArea(cover, Math.max(1, layerParams.base - EYE_M));
+    patchArea = layerArea(cover, Math.max(1, L.base - EYE_M));
     paintDome(false);
     updateCloudMeshes();
   } else {
-    const p = mode === 'quiz' ? quizParams : shapeParams;
+    const p = shapeParams;
     computeField({ ...p, noise: noiseFor(p.seed) }, field);
     if (morph) {
       const t = Math.min(1, (performance.now() - morph.start) / 900);
@@ -1125,6 +1134,8 @@ function recompute() {
 let baseTween = null;
 
 function frame(now) {
+  // a tween that finishes this frame still needs its last step drawn
+  if (tweens.size) needsRender = true;
   runTweens(now);
   if (baseTween) {
     const t = Math.min(1, (now - baseTween.start) / baseTween.duration);
@@ -1142,7 +1153,7 @@ function frame(now) {
     needsRender = true;
   }
   if (tweens.size || camFlying || baseTween) needsRender = true;
-  if (!camFlying && view === 'outside' && mode === 'layer') {
+  if (!camFlying && view === 'outside' && layerScene()) {
     // follow an étage change: scale the view about the observer, keeping the
     // angle the user chose
     const sc = viewScaleWanted;
@@ -1398,69 +1409,138 @@ setTimeout(() => {
 syncLayerControls();
 
 // ---------------------------------------------------------------- quiz
-
+//
+// A random sky: one cloud layer of a random type, at a base drawn around its
+// usual one, covering a random amount (not a whole number of octas, so the
+// rounding rules matter). You start inside, looking straight up with the
+// whole sky in view, as an observer turning round would see it; the guides,
+// the outside view and the sky map wait until you have answered.
+const QUIZ_TYPES = Object.keys(TYPES).filter(flatType);
+const QUIZ_LOOK = { pitch: 89.5 * DEG, fov: 150 };
 const answers = $('#quiz-answers');
+const quizTypes = $('#quiz-types');
+const pick = { amount: null, type: null };
 for (let k = 0; k <= 8; k++) {
   const b = document.createElement('button');
   b.textContent = k;
-  b.disabled = true;
-  b.addEventListener('click', () => answerQuiz(k));
+  b.addEventListener('click', () => choose('amount', k));
   answers.append(b);
 }
+for (const code of QUIZ_TYPES) {
+  const b = document.createElement('button');
+  b.textContent = code;
+  b.dataset.type = code;
+  b.title = TYPES[code].name;
+  b.addEventListener('click', () => choose('type', code));
+  quizTypes.append(b);
+}
+function choose(what, v) {
+  if (quiz.answered) return;
+  pick[what] = pick[what] === v ? null : v;
+  [...answers.children].forEach((b, k) => b.classList.toggle('on', pick.amount === k));
+  [...quizTypes.children].forEach((b) => b.classList.toggle('on', pick.type === b.dataset.type));
+  $('#quiz-check').disabled = pick.amount === null;
+}
 
-function newQuiz() {
+function newQuiz(instant = false) {
   const rnd = mulberry32(Math.floor(Math.random() * 1e9));
-  const n = Math.floor(rnd() * 9);
+  // amount: clear and overcast skies come up less often than the rest
+  const weights = [0.4, 1, 1, 1, 1, 1, 1, 1, 0.6];
+  let n = 0;
+  for (let r = rnd() * weights.reduce((a, b) => a + b); r > weights[n]; n++) r -= weights[n];
   let frac;
   if (n === 0) frac = 0;
   else if (n === 8) frac = 1;
   else if (n === 1) frac = 0.01 + rnd() * (1.5 / 8 - 0.01);
   else if (n === 7) frac = 6.5 / 8 + rnd() * (1.5 / 8 - 0.01);
   else frac = (n - 0.5 + rnd() * 0.999) / 8;
-  const shapes = ['lying', 'cap'];
-  quizParams = {
-    octas: frac * 8,
-    shape: shapes[Math.floor(rnd() * shapes.length)],
-    azimuth: Math.floor(rnd() * 360),
-    elevation: rnd() * 180,
-    // plain shapes only, for now
-    modifier: 'none',
-    amount: 0,
-    form: 0,
-    time: 0,
-    seed: 1 + Math.floor(rnd() * 1e6),
+  const type = QUIZ_TYPES[Math.floor(rnd() * QUIZ_TYPES.length)];
+  const t = TYPES[type];
+  // base: around the usual one, within the MANOBS range
+  const g = Math.sqrt(-2 * Math.log(1 - rnd())) * Math.cos(2 * Math.PI * rnd());
+  const ft = Math.min(t.baseRangeFt[1], Math.max(t.baseRangeFt[0], Math.round((t.baseFt * Math.exp(0.25 * g)) / 100) * 100));
+  const next = {
+    shape: 'cap', type, octas: frac * 8, base: ft * FT, etage: etageOf(ft), seed: 1,
+    azimuth: Math.floor(rnd() * 360), elevation: 15 + rnd() * 150,
   };
-  startMorph();
-  easeOctasTo(frac * 8, 900);
   quiz.answered = false;
+  pick.amount = pick.type = null;
   [...answers.children].forEach((b) => { b.disabled = false; b.className = ''; });
-  $('#quiz-result').textContent = '';
-  setView('inside', { yaw: rnd() * 2 * Math.PI });
+  [...quizTypes.children].forEach((b) => { b.disabled = false; b.className = ''; });
+  $('#quiz-check').disabled = true;
+  $('#quiz-result').innerHTML = '';
+  const show = () => {
+    quizLayer = next;
+    octasShown = next.octas;
+    tweens.delete('octas');
+    dirty = true;
+  };
+  // a new sky fades in over the old one
+  if (quizLayer && mode === 'quiz' && !instant && !REDUCED_MOTION) {
+    animate('typeFade', 300, (e) => { layerUniforms.layerFade.value = 1 - e; }, () => {
+      show();
+      animate('typeFade', 400, (e) => { layerUniforms.layerFade.value = e; });
+    });
+  } else {
+    show();
+    layerUniforms.layerFade.value = 1;
+  }
+  setView('inside', { yaw: rnd() * 2 * Math.PI, instant, ...QUIZ_LOOK });
   syncQuizLock();
-  dirty = true;
 }
 
-function answerQuiz(k) {
-  if (quiz.answered || !quizParams) return;
+// The METAR sky condition group: amount and base in hundreds of feet,
+// rounded down (to 100 ft up to 10,000 ft, then to 1,000 ft).
+function skyGroup(octas, ft) {
+  if (octas === 0) return 'SKC';
+  const step = ft <= 10000 ? 100 : 1000;
+  return `${skyTerm(octas)}${String(Math.floor(ft / step) * step / 100).padStart(3, '0')}`;
+}
+
+function answerQuiz() {
+  if (quiz.answered || !quizLayer || pick.amount === null) return;
   quiz.answered = true;
   const truth = reportedOctas(coveredFrac);
-  const ok = k === truth;
+  const k = pick.amount;
+  const amountOk = k === truth;
   quiz.total++;
-  if (ok) { quiz.right++; quiz.streak++; } else quiz.streak = 0;
+  if (amountOk) quiz.right++;
+  // the type is scored when you named one and there was cloud to name
+  const typeAsked = pick.type !== null && truth > 0;
+  const typeOk = typeAsked && pick.type === quizLayer.type;
+  if (typeAsked) { quiz.typeTotal++; if (typeOk) quiz.typeRight++; }
+  quiz.streak = amountOk && (!typeAsked || typeOk) ? quiz.streak + 1 : 0;
   [...answers.children].forEach((b, i) => {
     b.disabled = true;
-    if (i === truth) b.className = 'right';
-    else if (i === k) b.className = 'wrong';
+    b.className = i === truth ? 'right' : i === k ? 'wrong' : '';
   });
+  [...quizTypes.children].forEach((b) => {
+    b.disabled = true;
+    const code = b.dataset.type;
+    b.className = truth > 0 && code === quizLayer.type ? 'right' : code === pick.type ? 'wrong' : '';
+  });
+  $('#quiz-check').disabled = true;
   const off = k - truth;
-  $('#quiz-result').innerHTML = ok
-    ? `<span class="ok">Correct.</span> ${fmtOctas(coveredFrac)} octas exactly, reported as ${truth}.`
-    : `<span class="no">${off > 0 ? 'Too high' : 'Too low'} by ${Math.abs(off)}.</span> ${fmtOctas(coveredFrac)} octas exactly, reported as ${truth}.`;
-  $('#quiz-score').textContent = `Score ${quiz.right} / ${quiz.total} · streak ${quiz.streak}`;
+  const t = TYPES[quizLayer.type];
+  const ft = Math.round(quizLayer.base / FT);
+  const amountLine = amountOk
+    ? `<span class="ok">Amount correct.</span>`
+    : `<span class="no">Amount ${off > 0 ? 'too high' : 'too low'} by ${Math.abs(off)}.</span>`;
+  const typeLine = truth === 0 ? ''
+    : typeAsked
+      ? (typeOk ? `<span class="ok">Type correct:</span> ${quizLayer.type}, ${t.name.toLowerCase()}.`
+        : `<span class="no">Type:</span> it was ${quizLayer.type}, ${t.name.toLowerCase()}, not ${pick.type}.`)
+      : `Type: ${quizLayer.type}, ${t.name.toLowerCase()}.`;
+  $('#quiz-result').innerHTML = `${amountLine} ${fmtOctas(coveredFrac)} octas exactly, reported as
+    ${truth} (${skyTerm(truth)}).<br>${typeLine}
+    ${truth > 0 ? `Base ${ft.toLocaleString('en-CA')} ft. Sky condition: <code>${skyGroup(truth, ft)}</code>` : ''}`;
+  $('#quiz-score').textContent = `Amount ${quiz.right} / ${quiz.total}`
+    + (quiz.typeTotal ? ` · type ${quiz.typeRight} / ${quiz.typeTotal}` : '') + ` · streak ${quiz.streak}`;
   syncQuizLock();
   updateReadout();
 }
-$('#quiz-new').addEventListener('click', newQuiz);
+$('#quiz-check').addEventListener('click', answerQuiz);
+$('#quiz-new').addEventListener('click', () => newQuiz());
 
 // ---------------------------------------------------------------- tabs, view
 
@@ -1473,6 +1553,9 @@ function syncQuizLock() {
   out.disabled = locked;
   out.title = locked ? 'Answer first: then you can step outside' : '';
   $('.skymap').classList.toggle('hidden', locked);
+  // no guide lines in the real sky
+  guideGroup.visible = !locked;
+  needsRender = true;
 }
 $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
   const tab = b.dataset.tab;
@@ -1492,26 +1575,15 @@ $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
     domeCtl.azimuth.set(layerParams.azimuth);
     domeCtl.elevation.set(layerParams.elevation);
   }
-  if ((prev === 'layer') === (next === 'layer')) {
-    // octas <-> quiz: same scene, so the sky morphs from one to the other
-    startMorph();
-    mode = next;
-    if (mode === 'quiz' && !quizParams) newQuiz();
-    else easeOctasTo(mode === 'quiz' ? quizParams.octas : shapeParams.octas);
-    if (mode === 'quiz' && !quiz.answered && view === 'outside') setView('inside');
-    syncQuizLock();
-    dirty = true;
-    return;
-  }
-  // to or from the cloud layer: a different scene and scale, so fade through
+  // a different scene (and scale): fade through
   canvasFade(0);
   setTimeout(() => {
     mode = next;
-    if (mode === 'quiz' && !quizParams) newQuiz();
-    octasShown = mode === 'quiz' ? quizParams.octas : shapeParams.octas;
+    if (mode === 'quiz' && !quizLayer) newQuiz(true);
+    octasShown = mode === 'quiz' ? quizLayer.octas : shapeParams.octas;
     morph = null;
     tweens.delete('octas');
-    if (mode === 'quiz' && !quiz.answered) setView('inside', { instant: true });
+    if (mode === 'quiz' && !quiz.answered) setView('inside', { instant: true, ...QUIZ_LOOK });
     else if (view === 'outside') keepOutsideAngle();
     recompute();
     needsRender = true;
