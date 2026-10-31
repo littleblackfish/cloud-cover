@@ -179,7 +179,10 @@ const mixRGB = (a, b, t) => a.map((v, i) => Math.round(lerp(v, b[i], t)));
 //   profile  the power in the profile: 2 domes, higher steeper-sided towers
 //   anvil    how far the top spreads out
 //   solid    drawn as solid shapes instead: cumulus.js
-//   meshNear drawn as solid shapes near the observer, the pattern beyond
+//   meshNear drawn as solid shapes near the observer, the pattern beyond:
+//            grid spacing across and along the pattern, thickness (m), R0
+//            (lump size), turrets, ragged (broken into small blobs), sheet
+//            (lit as a sheet: only the tops in the sun)
 export const TYPES = {
   CI: {
     name: 'Cirrus', etage: 'high', baseFt: 29000, baseRangeFt: [20000, 39000],
@@ -224,7 +227,7 @@ export const TYPES = {
     name: 'Altocumulus', etage: 'mid', baseFt: 16000, baseRangeFt: [6500, 20000],
     tileM: 9000, featureM: 220, amount: 0.9, blotch: 0.5, soft: 0.015,
     opacity: 0.93, grey: [218, 222, 229], shade: 0.35, angle: 20, res: 512,
-    meshNear: { across: 200, along: 290, thick: 110, R0: 250 },
+    meshNear: { across: 200, along: 290, thick: 110, R0: 250, sheet: true },
     // small elements with little shading near 16,000 ft, darker lower
     vary: (ft) => {
       const t = (ft - 7000) / 9000;
@@ -243,7 +246,7 @@ export const TYPES = {
     opacity: 0.95, grey: [196, 201, 210], shade: 0.2, angle: 20, res: 512,
     // near the observer: altocumulus elements with turrets on the thicker
     // ones, some taller than wide
-    meshNear: { across: 200, along: 400, thick: 110, R0: 250, turrets: true },
+    meshNear: { across: 200, along: 400, thick: 110, R0: 250, turrets: true, sheet: true },
     vary: (ft) => ({ grey: mixRGB([190, 195, 204], [214, 218, 226], (ft - 7000) / 9000) }),
     help: 'Altocumulus with turrets, some taller than wide, on a common base, in lines. Base 6,500–20,000 ft.',
     gen(u, v, s) {
@@ -285,7 +288,7 @@ export const TYPES = {
     opacity: 0.96, wisp: 0.08, grey: [214, 218, 224], shade: 0.5, angle: 20, res: 512,
     // near the observer, drawn as solid rolls (main.js sheetSpheres):
     // grid spacing across and along the rolls, and thickness (m)
-    meshNear: { across: 170, along: 420, thick: 140, R0: 400 },
+    meshNear: { across: 170, along: 420, thick: 140, R0: 400, sheet: true },
     help: 'Grey or whitish patches or sheets of rounded masses or rolls, with dark parts; elements over three fingers wide. Base 500–6,500 ft.',
     gen(u, v, s) {
       // rolls in rows across the wind (about 300 m apart, a km or two long),
@@ -308,6 +311,9 @@ export const TYPES = {
     name: 'Stratus fractus', etage: 'low', baseFt: 800, baseRangeFt: [100, 1500],
     tileM: 2500, featureM: 90, amount: 2.0, blotch: 0.3, soft: 0.02,
     opacity: 0.85, grey: [184, 188, 195], shade: 0.25, angle: 25, res: 512,
+    // near the observer: ragged clusters of small, thin blobs, drawn out
+    // along the wind
+    meshNear: { across: 70, along: 150, thick: 45, R0: 90, ragged: true, sheet: true },
     help: 'Ragged stratus. Base near the surface to 1,500 ft.',
     gen(u, v, s) {
       const [a, b] = warp(u, v, 8, 0.9, s);
@@ -333,6 +339,8 @@ export const TYPES = {
     name: 'Cumulus fractus', etage: 'low', baseFt: 2500, baseRangeFt: [1500, 10000],
     tileM: 4000, featureM: 300, amount: 1.2, blotch: 0.3, soft: 0.02,
     opacity: 0.9, grey: [222, 226, 231], shade: 0.3, angle: 0, res: 512,
+    // near the observer: ragged clusters of small puffs, sunlit like cumulus
+    meshNear: { across: 110, along: 110, thick: 110, R0: 160, ragged: true, sheet: false },
     help: 'Ragged cumulus. Base usually 1,500–6,500 ft.',
     gen(u, v, s) {
       const [a, b] = warp(u, v, 8, 0.45, s);

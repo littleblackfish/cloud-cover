@@ -663,6 +663,7 @@ const solidUniforms = {
   fade: layerUniforms.layerFade,
   bumpM: { value: 130 },
   lumpM: { value: 200 },
+  lumpAmp: { value: 0.1 }, // how far the lumps push the surface (of the radius)
   sheet: { value: 0 }, // 1 for a sheet (stratocumulus), see the shader
 };
 const solidMaterial = new THREE.ShaderMaterial({
@@ -674,7 +675,7 @@ const solidMaterial = new THREE.ShaderMaterial({
     #include <logdepthbuf_pars_vertex>
     attribute float aBase;
     attribute float aTop;
-    uniform float metresPerUnit, lumpM;
+    uniform float metresPerUnit, lumpM, lumpAmp;
     varying vec3 vN, vW;
     varying float vBase, vTop;
     // Perlin (gradient) noise, about -1..1
@@ -698,7 +699,7 @@ const solidMaterial = new THREE.ShaderMaterial({
       // neighbouring spheres agree.
       vec4 w0 = modelMatrix * instanceMatrix * vec4(position, 1.0);
       float lump = perlin(w0.xyz * metresPerUnit / lumpM);
-      vec4 w = modelMatrix * instanceMatrix * vec4(position * (1.0 + 0.1 * lump), 1.0);
+      vec4 w = modelMatrix * instanceMatrix * vec4(position * (1.0 + lumpAmp * lump), 1.0);
       vec3 sc = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
       // the normal of a scaled (and turned) sphere
       vN = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * (normal / (sc * sc)));
@@ -812,7 +813,9 @@ function updateSolidMeshes(show) {
   }
   solidLook();
   const R0 = (SOLID[type] ?? TYPES[type].meshNear).R0;
-  solidUniforms.sheet.value = TYPES[type]?.meshNear ? 1 : 0;
+  solidUniforms.sheet.value = TYPES[type]?.meshNear?.sheet ? 1 : 0;
+  // fractus: torn outlines
+  solidUniforms.lumpAmp.value = TYPES[type]?.meshNear?.ragged ? 0.32 : 0.1;
   solidUniforms.bumpM.value = R0 * 0.09;
   solidUniforms.lumpM.value = R0 * 0.3;
 }
@@ -827,7 +830,13 @@ function updateSolidMeshes(show) {
 // the layer surface's nearM).
 const SHEET = { nearDeg: 3, maxM: 20000 };
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
-const sheetNearM = (L) => Math.min(SHEET.maxM, Math.max(3000, Math.max(1, L.base - EYE_M) / Math.tan(SHEET.nearDeg * DEG)));
+// (also no farther than about 15,000 grid points reach, so small elements
+// do not swamp the GPU)
+const sheetNearM = (L) => {
+  const g = TYPES[L.type].meshNear;
+  const cap = Math.sqrt((15000 * g.across * g.along) / Math.PI);
+  return Math.min(SHEET.maxM, cap, Math.max(3000, Math.max(1, L.base - EYE_M) / Math.tan(SHEET.nearDeg * DEG)));
+};
 function sheetSpheres(L, T) {
   const t = TYPES[L.type];
   const g = t.meshNear;
@@ -856,6 +865,24 @@ function sheetSpheres(L, T) {
       const rv = g.thick * (0.35 + 0.9 * th);
       const grow = 0.75 + 0.45 * th;
       const top = up + 2 * g.thick + (g.turrets ? 4 * g.thick : 0);
+      if (g.ragged) {
+        // fractus: a few small blobs scattered round the point, of uneven
+        // size, so the edges come out torn
+        const n = 1 + Math.floor(h1 * 2.99);
+        for (let k = 0; k < n; k++) {
+          const r1 = frac(Math.sin((i + 0.37 * k) * 91.17 + j * 47.3) * 13758.21);
+          const r2 = frac(Math.sin(i * 23.71 + (j + 0.61 * k) * 63.9) * 29481.37);
+          const r3 = frac(Math.sin((i - k) * 7.13 + j * 17.9) * 51327.77);
+          const sz = (0.35 + 0.45 * r3) * grow;
+          const ox = (r1 - 0.5) * 0.9 * g.across, oy = (r2 - 0.5) * 0.9 * g.along;
+          const bv = rv * (0.6 + 0.6 * r3);
+          list.push({
+            e: x + ox * ux + oy * vx, n: y + ox * uy + oy * vy, up: up + 0.5 * bv + 0.4 * rv * r1,
+            rh: g.across * sz, rh2: g.along * sz, rv: bv, base: up, top, detail: true, rot: -ang,
+          });
+        }
+        continue;
+      }
       list.push({
         e: x, n: y, up: up + 0.45 * rv,
         rh: 0.8 * g.across * grow, rh2: 0.75 * g.along * grow, rv,
@@ -901,6 +928,8 @@ const SOLID_LOOK = {
   SC: { lit: [236, 239, 244], shade: [176, 182, 193], base: [140, 147, 158] },
   AC: { lit: [246, 248, 251], shade: [198, 204, 214], base: [168, 175, 186] },
   ACC: { lit: [246, 248, 251], shade: [192, 198, 209], base: [160, 167, 179] },
+  CF: { lit: [250, 251, 253], shade: [200, 206, 216], base: [160, 167, 178] },
+  SF: { lit: [214, 218, 224], shade: [160, 166, 176], base: [132, 138, 148] },
 };
 
 // Point the shared layer uniforms at the current layer.
