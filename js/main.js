@@ -1506,9 +1506,8 @@ $$('#guides button').forEach((b) => b.addEventListener('click', () => setGuides(
 
 // ---------------------------------------------------------------- layer tab
 
-// Cloud base height is shown in feet or metres; everything is
-// stored in metres. Horizontal distances stay metric.
-let heightUnit = 'ft';
+// Heights are given in feet, as MANOBS does, with metres in brackets;
+// everything is stored in metres.
 // The base range (ft): the type's, from MANOBS; any height for a plain patch.
 const PLAIN_RANGE_FT = [100, 39000];
 const baseRangeFt = (type) => TYPES[type]?.baseRangeFt ?? PLAIN_RANGE_FT;
@@ -1516,18 +1515,15 @@ const baseRangeFt = (type) => TYPES[type]?.baseRangeFt ?? PLAIN_RANGE_FT;
 const etageOf = (ft) => (ft <= 6500 ? 'low' : ft < 20000 ? 'mid' : 'high');
 const heightRange = () => {
   const [lo, hi] = baseRangeFt(layerParams.type);
-  return heightUnit === 'ft'
-    ? [lo, hi, 100]
-    : [Math.ceil((lo * FT) / 10) * 10, Math.floor((hi * FT) / 10) * 10, 10];
+  return [lo, hi, 100];
 };
-const fmtHeight = (m) => (heightUnit === 'ft'
-  ? `${(Math.round(m / FT / 10) * 10).toLocaleString('en-CA')} ft`
-  : `${Math.round(m).toLocaleString('en-CA')} m`);
+const fmtHeight = (m) => `${(Math.round(m / FT / 10) * 10).toLocaleString('en-CA')} ft
+  (${(Math.round(m / 10) * 10).toLocaleString('en-CA')} m)`;
 
 function bindHeight(id, key) {
   const input = $(`#${id}`);
   const out = $(`#${id}-out`);
-  const per = () => (heightUnit === 'ft' ? FT : 1);
+  const per = () => FT;
   const sync = () => { out.textContent = fmtHeight(layerParams[key]); };
   const place = () => {
     const [min, max, step] = heightRange();
@@ -1608,12 +1604,6 @@ function syncLayerChips() {
   });
   $('#lcover-out').textContent = `${layerParams.octas}/8`;
 }
-$$('#units button').forEach((b) => b.addEventListener('click', () => {
-  heightUnit = b.dataset.units;
-  if (quizLayer) showQuizBase();
-  $$('#units button').forEach((x) => x.classList.toggle('on', x === b));
-  layerCtl.base.sync();
-}));
 
 // Typical base for each étage (ft; frames the outside view).
 const ETAGE_BASE_FT = { low: 4000, mid: 12000, high: 28000 };
