@@ -34,7 +34,8 @@ and is hosted on GitHub Pages without a build step.
 - **Quiz tab:** a random sky of one cloud type (any of the drawable types)
   at a base around its usual one, covering a random, usually fractional,
   amount. You start inside, looking straight up with the whole sky in view
-  and no guides. Answer the amount (and optionally the type); the answer is
+  and no guides. A hint button gives the cloud base, as a ceilometer would.
+  Answer the amount (and optionally the type); the answer is
   scored with the octa rounding rules and shown with its amount term, base
   and sky condition group (e.g. `BKN035`). The guides, outside view and sky
   map open after answering.

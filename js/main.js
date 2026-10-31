@@ -1308,6 +1308,7 @@ function syncLayerChips() {
 }
 $$('#units button').forEach((b) => b.addEventListener('click', () => {
   heightUnit = b.dataset.units;
+  if (quizLayer) showQuizBase();
   $$('#units button').forEach((x) => x.classList.toggle('on', x === b));
   layerCtl.base.sync();
 }));
@@ -1469,8 +1470,10 @@ function newQuiz(instant = false) {
   [...quizTypes.children].forEach((b) => { b.disabled = false; b.className = ''; });
   $('#quiz-check').disabled = true;
   $('#quiz-result').innerHTML = '';
+  baseShown = false;
   const show = () => {
     quizLayer = next;
+    showQuizBase();
     octasShown = next.octas;
     tweens.delete('octas');
     dirty = true;
@@ -1487,6 +1490,21 @@ function newQuiz(instant = false) {
   }
   setView('inside', { yaw: rnd() * 2 * Math.PI, instant, ...QUIZ_LOOK });
   syncQuizLock();
+}
+
+// The base, as a ceilometer would give it, is a hint for the type: hidden
+// behind a button until asked for (or answered).
+let baseShown = false;
+function showQuizBase() {
+  const box = $('#quiz-base');
+  if (!baseShown && !quiz.answered) {
+    box.innerHTML = '<button id="quiz-hint" title="What a ceilometer would read">Hint: cloud base</button>';
+    $('#quiz-hint').addEventListener('click', () => { baseShown = true; showQuizBase(); });
+    return;
+  }
+  box.innerHTML = quizLayer.octas > 0
+    ? `Cloud base <strong>${fmtHeight(quizLayer.base)}</strong>`
+    : 'Cloud base: none detected';
 }
 
 // The METAR sky condition group: amount and base in hundreds of feet,
@@ -1520,6 +1538,7 @@ function answerQuiz() {
     b.className = truth > 0 && code === quizLayer.type ? 'right' : code === pick.type ? 'wrong' : '';
   });
   $('#quiz-check').disabled = true;
+  showQuizBase();
   const off = k - truth;
   const t = TYPES[quizLayer.type];
   const ft = Math.round(quizLayer.base / FT);
@@ -1533,7 +1552,7 @@ function answerQuiz() {
       : `Type: ${quizLayer.type}, ${t.name.toLowerCase()}.`;
   $('#quiz-result').innerHTML = `${amountLine} ${fmtOctas(coveredFrac)} octas exactly, reported as
     ${truth} (${skyTerm(truth)}).<br>${typeLine}
-    ${truth > 0 ? `Base ${ft.toLocaleString('en-CA')} ft. Sky condition: <code>${skyGroup(truth, ft)}</code>` : ''}`;
+    ${truth > 0 ? `Sky condition: <code>${skyGroup(truth, ft)}</code>` : ''}`;
   $('#quiz-score').textContent = `Amount ${quiz.right} / ${quiz.total}`
     + (quiz.typeTotal ? ` · type ${quiz.typeRight} / ${quiz.typeTotal}` : '') + ` · streak ${quiz.streak}`;
   syncQuizLock();

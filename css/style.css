@@ -271,3 +271,5 @@ code { font-size: 12.5px; background: var(--chip); padding: 1px 4px; border-radi
 .quiz-result code { font-size: 14px; font-weight: 650; }
 .chips button.right:disabled, .chips button.wrong:disabled,
 .type-chips button.right:disabled, .type-chips button.wrong:disabled { opacity: 1; cursor: default; }
+.quiz-base { font-size: 15px; margin: 12px 0 4px; min-height: 30px; }
+.quiz-base button { font: inherit; font-size: 13px; border: 1px solid var(--line); background: var(--chip); color: var(--ink); padding: 5px 10px; border-radius: 6px; cursor: pointer; }
