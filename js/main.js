@@ -500,7 +500,7 @@ function curvedRing(r0, r1, segments, rings) {
 }
 const planet = new THREE.Mesh(
   curvedRing(REACH, PLANET_M * K, 192, 96),
-  new THREE.MeshBasicMaterial({ color: 0x33402f, transparent: true, opacity: 0.3, depthWrite: false, side: THREE.DoubleSide }),
+  new THREE.MeshBasicMaterial({ color: 0x3a4a36, transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide }),
 );
 planet.position.y = GROUND_Y;
 scene.add(planet);
@@ -658,7 +658,10 @@ const orbit = new OrbitControls(camera, canvas);
 orbit.enableDamping = true;
 orbit.minDistance = 1.2;
 orbit.maxDistance = 7; // widened in cloud-layer mode
-orbit.maxPolarAngle = Math.PI / 2 + 0.35;
+// The camera never goes below the ground: it orbits a point above the
+// ground, never below that point's level, and cannot be panned.
+orbit.maxPolarAngle = Math.PI / 2 - 0.01;
+orbit.enablePan = false;
 // The controls apply zooms (and some moves) inside their own event handlers,
 // so redraw whenever they report a change, not only when the frame loop sees
 // one.
@@ -692,13 +695,9 @@ function cameraHeading() {
   return Math.atan2(f.x, -f.z);
 }
 function setOrbitLimits() {
-  if (mode === 'layer') {
-    orbit.maxDistance = 150; // far enough to see the whole layer, out to the line of sight
-    orbit.maxPolarAngle = Math.PI / 2 - 0.01; // stay above the ground
-  } else {
-    orbit.maxDistance = 40; // room to zoom out over the planet
-    orbit.maxPolarAngle = Math.PI / 2 + 0.35;
-  }
+  // far enough to see the whole layer out to the line of sight, or the
+  // planet around the dome
+  orbit.maxDistance = mode === 'layer' ? 150 : 40;
 }
 function flyTo(pos, target, fov, ms, done) {
   needsRender = true; // an instant move still has to be drawn
