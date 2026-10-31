@@ -181,21 +181,26 @@ export const TYPES = {
     gen(u, v, s) {
       // detached tufts, stretched along the wind and gently bent; inside
       // them, fine parallel fibres decide how much sky shows through
-      const [a, b] = warp(u, v, 3, 0.3, s);
-      const tuft = fbm(a, b, 3, 8, 4, s + 5);
-      const fibre = (1 - Math.abs(fbm(a, b, 4, 64, 3, s + 9) * 0.8)) ** 3;
+      const [a, b] = warp(u, v, 2, 0.12, s);
+      const tuft = fbm(a, b, 2, 12, 4, s + 5);
+      const fibre = (1 - Math.abs(fbm(a, b, 3, 96, 3, s + 9) * 0.8)) ** 5;
       return [1.2 * tuft + 0.3 * fibre, clamp01(0.1 + 0.9 * fibre)];
     },
   },
   CC: {
     name: 'Cirrocumulus', etage: 'high', baseFt: 29000, baseRangeFt: [20000, 39000],
-    tileM: 7000, featureM: 95, amount: 1.0, blotch: 0.6, soft: 0.01,
-    opacity: 0.85, grey: [244, 246, 249], shade: 0.12, angle: 15, res: 512,
+    tileM: 7000, featureM: 150, amount: 1.1, blotch: 0.6, soft: 0.02,
+    opacity: 0.8, wisp: 0.45, grey: [244, 246, 249], shade: 0.06, angle: 15, res: 512,
     help: 'Cirrocumulus (CC): a thin white patch, sheet or layer without shading, of very small grains or ripples, more or less regularly arranged; most elements narrower than one finger at arm’s length. Base 20,000–39,000 ft; on average 29,000 ft in summer, 26,000 ft in winter.',
     gen(u, v, s) {
-      const [a, b] = warp(u, v, 9, 0.25, s);
-      const e = cells(a, b, 72, 56, s, 0.86, 0.48);
-      return [e + 0.12 * fbm(u, v, 24, 24, 2, s + 3), clamp01(e)];
+      // fine ripples (crests across the wind, about 150 m apart), wavering
+      // and broken into grains along each crest, merged into thin sheets
+      const [a, b] = warp(u, v, 6, 0.2, s);
+      const ripple = Math.sin(2 * Math.PI * 47 * a + 1.2 * gnoise(a, b, 12, 12, s + 1));
+      const grains = gnoise(a, b, 47, 24, s + 2);
+      const sheet = fbm(u, v, 3, 8, 3, s + 3); // streaky patches along the wind
+      const c = 0.6 * ripple + 0.3 * grains + 0.9 * sheet;
+      return [c, clamp01(0.5 + 0.35 * ripple + 0.3 * grains)];
     },
   },
   CS: {
@@ -254,13 +259,15 @@ export const TYPES = {
   },
   SC: {
     name: 'Stratocumulus', etage: 'low', baseFt: 3500, baseRangeFt: [500, 6500],
-    tileM: 10000, featureM: 700, amount: 0.55, blotch: 0.4, soft: 0.03,
-    opacity: 0.95, grey: [205, 209, 215], shade: 0.35, angle: 20, res: 512,
+    tileM: 10000, featureM: 300, amount: 0.7, blotch: 0.35, soft: 0.04,
+    opacity: 0.96, wisp: 0.08, grey: [214, 218, 224], shade: 0.5, angle: 20, res: 512,
     help: 'Stratocumulus (SC): a grey or whitish patch, sheet or layer, almost always with dark parts, of tessellations, rounded masses or rolls, not fibrous; most elements wider than three fingers at arm’s length. Base 500–6,500 ft: below 1,000 ft few rolls and large elements, and more rolls and smaller elements the higher the base.',
     gen(u, v, s) {
-      const [a, b] = warp(u, v, 6, 0.25, s);
-      const e = cells(a, b, 14, 9, s, 0.97, 0.78);
-      return [e + 0.25 * fbm(u, v, 28, 28, 3, s + 3), clamp01(e)];
+      // rolls in rows across the wind (about 300 m apart, a km or two long),
+      // mostly merged, thick and dark in the middle, thin at the seams
+      const [a, b] = warp(u, v, 4, 0.12, s);
+      const e = cells(a, b, 32, 7, s, 0.98, 0.8);
+      return [e + 0.2 * fbm(u, v, 32, 32, 3, s + 3), clamp01(0.05 + 1.1 * e)];
     },
   },
   ST: {
