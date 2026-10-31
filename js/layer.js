@@ -17,6 +17,7 @@
 // patterns themselves are shared, baked once below.
 
 import { grid, W, H, shapeField, patchCentre } from './sky.js';
+import { CLIMATE } from './climate.js';
 
 export const EARTH_R = 6371000;
 
@@ -361,6 +362,13 @@ export const TYPES = {
   },
 
 };
+// The usual base: what Canadian observers report most (the median, see
+// climate.js), within the MANOBS range.
+for (const [code, t] of Object.entries(TYPES)) {
+  const med = CLIMATE[code]?.base[2];
+  if (med) t.baseFt = Math.min(t.baseRangeFt[1], Math.max(t.baseRangeFt[0], Math.round(med / 100) * 100));
+}
+
 export const TYPE_ROWS = [
   ['high', ['CI', 'CC', 'CS']],
   ['mid', ['AC', 'ACC', 'AS']],

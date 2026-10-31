@@ -27,7 +27,8 @@ and is hosted on GitHub Pages without a build step.
   the sun; see js/cumulus.js): coverage is set by growing every cloud from
   its base, solved exactly per sky direction, so toward the horizon their
   sides fill the gaps. ACC has turrets traced through their height. Picking a
-  type moves the layer to its usual base, and the base slider covers the
+  type moves the layer to its usual base (the median reported in Canadian
+  METARs, 2023–24; its description gives the reported range and amounts), and the base slider covers the
   type's range; the étage follows from the base. Bases, base ranges and
   descriptions follow MANOBS (8th edition) table 7-1; the readout gives the
   amount term (FEW, SCT, BKN, OVC) from table 7-2.
@@ -91,6 +92,7 @@ No internet access is needed at runtime: three.js is vendored in `vendor/`
 - `js/layer.js`: cloud-layer field (shape + texture on the layer)
 - `js/cumulus.js`: solid cumuliform clouds (layout, shapes, exact coverage)
 - `js/sun.js`: the sun's position (declination, equation of time, sunrise and sunset)
+- `js/climate.js`: how Canadian observers report each type (from METARs; see `docs/metar-stats.md` and `tools/`)
 - `js/main.js`: 3D scene, all-sky map and UI
 
 ## Caveat

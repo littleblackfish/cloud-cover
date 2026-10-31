@@ -114,10 +114,11 @@ export const SOLID = {
 // Clouds join one after another as the amount grows: each takes BAND
 // (radians of "reach", see order) to grow from nothing to full size. Once
 // all have joined (REACH_ALL), all of them grow further, up to GROW_MAX
-// times their size, for the larger amounts.
+// times their size, for the larger amounts (Canadian observers report CU at
+// 6 or 7 octas in about one report in six).
 const BAND = 0.12;
 const REACH_ALL = Math.PI * 1.6 + BAND;
-const GROW_MAX = 2.2;
+const GROW_MAX = 3;
 const GROW_PER = 1; // size added per unit of reach past REACH_ALL
 export const REACH_MAX = REACH_ALL + (GROW_MAX - 1) / GROW_PER;
 // a cloud's scale (of its R0) at a reach, given its order and full size

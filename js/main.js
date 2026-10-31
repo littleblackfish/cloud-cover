@@ -10,6 +10,7 @@ import {
 } from './layer.js';
 import { solidField, solidSpheres, REACH_MAX, SOLID } from './cumulus.js';
 import { dayOfYear, solarDay, halfDay, sunPosition, utcMinutes } from './sun.js';
+import { CLIMATE } from './climate.js';
 
 const DEG = Math.PI / 180;
 const FT = 0.3048; // metres per foot
@@ -1599,12 +1600,21 @@ const GENUS = {
   high: 'High étage: cirrus (Ci), cirrocumulus (Cc) and cirrostratus (Cs).',
 };
 
+// What Canadian observers report for a type (climate.js), in a sentence.
+function climateLine(code) {
+  const c = CLIMATE[code];
+  if (!c) return '';
+  const ft = (v) => v.toLocaleString('en-CA');
+  const most = c.octas.indexOf(Math.max(...c.octas)) + 1;
+  return `In Canadian reports (2023–24, as the only layer, ${ft(c.n)} reports): base usually
+    ${ft(c.base[1])}–${ft(c.base[3])} ft (median ${ft(c.base[2])}); most often ${most} octa${most > 1 ? 's' : ''}.`;
+}
 function syncLayerControls() {
   $('#genus').textContent = GENUS[layerParams.etage];
   const t = TYPES[layerParams.type];
   $$('#ltypes button').forEach((b) => b.classList.toggle('on', b.dataset.type === layerParams.type));
   $('#ltype-out').textContent = t ? `${layerParams.type} · ${t.name}` : 'plain patch';
-  $('#type-help').textContent = t ? t.help
+  $('#type-help').textContent = t ? `${t.help} ${climateLine(layerParams.type)}`
     : 'A plain round patch: pick a cloud type to see how it looks from the ground.';
   layerCtl.base.sync();
   syncLayerChips();
@@ -1802,23 +1812,35 @@ function choose(what, v) {
   $('#quiz-check').disabled = pick.amount === null;
 }
 
+// a random index, with the given weights
+function pickWeighted(rnd, weights) {
+  let r = rnd() * weights.reduce((a, b) => a + b, 0), i = 0;
+  while (i < weights.length - 1 && r > weights[i]) r -= weights[i++];
+  return i;
+}
 function newQuiz(instant = false) {
   const rnd = mulberry32(Math.floor(Math.random() * 1e9));
-  // amount: clear and overcast skies come up less often than the rest
-  const weights = [0.4, 1, 1, 1, 1, 1, 1, 1, 0.6];
-  let n = 0;
-  for (let r = rnd() * weights.reduce((a, b) => a + b); r > weights[n]; n++) r -= weights[n];
+  // Skies as Canadian observers report them (climate.js): the type by how
+  // often it is reported (evened out a little, so rare types still come
+  // up), then its amount and base from its own reports. Now and then a
+  // clear sky.
+  const type = QUIZ_TYPES[pickWeighted(rnd, QUIZ_TYPES.map((c) => Math.sqrt(CLIMATE[c]?.n ?? 100)))];
+  const t = TYPES[type];
+  const clim = CLIMATE[type];
+  const n = rnd() < 0.04 ? 0 : clim ? 1 + pickWeighted(rnd, clim.octas) : 1 + Math.floor(rnd() * 8);
   let frac;
   if (n === 0) frac = 0;
   else if (n === 8) frac = 1;
   else if (n === 1) frac = 0.01 + rnd() * (1.5 / 8 - 0.01);
   else if (n === 7) frac = 6.5 / 8 + rnd() * (1.5 / 8 - 0.01);
   else frac = (n - 0.5 + rnd() * 0.999) / 8;
-  const type = QUIZ_TYPES[Math.floor(rnd() * QUIZ_TYPES.length)];
-  const t = TYPES[type];
-  // base: around the usual one, within the MANOBS range
-  const g = Math.sqrt(-2 * Math.log(1 - rnd())) * Math.cos(2 * Math.PI * rnd());
-  const ft = Math.min(t.baseRangeFt[1], Math.max(t.baseRangeFt[0], Math.round((t.baseFt * Math.exp(0.25 * g)) / 100) * 100));
+  // base: from the type's reported bases (500 ft bins), within the MANOBS range
+  let ft = t.baseFt;
+  if (clim) {
+    const bin = clim.baseHist[pickWeighted(rnd, clim.baseHist.map(([, k]) => k))][0];
+    ft = Math.round((bin + rnd() * 500) / 100) * 100;
+  }
+  ft = Math.min(t.baseRangeFt[1], Math.max(t.baseRangeFt[0], ft));
   const next = {
     shape: 'cap', type, octas: frac * 8, base: ft * FT, etage: etageOf(ft), seed: 1,
     azimuth: Math.floor(rnd() * 360), elevation: 15 + rnd() * 150,
