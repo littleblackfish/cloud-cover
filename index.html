@@ -24,12 +24,8 @@
 
       <figure class="skymap">
         <canvas id="skymap" width="440" height="440" aria-label="All-sky map"></canvas>
-        <figcaption>
-          <span>All-sky map, equal-area</span>
-        </figcaption>
+        <figcaption class="readout" id="readout" aria-live="polite"></figcaption>
       </figure>
-
-      <div class="readout" id="readout" aria-live="polite"></div>
     </main>
 
     <div class="stage-tools">
@@ -116,6 +112,8 @@
         <label class="field">
           <span>Cloud base height <output id="lbase-out"></output></span>
           <input type="range" id="lbase" min="100" max="39000" step="100" value="4000">
+          <canvas class="freq-strip" id="lbase-freq" height="14" aria-hidden="true"
+            title="How often observers report each base for this type"></canvas>
         </label>
 
         <div class="field sun">

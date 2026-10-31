@@ -5,7 +5,7 @@ import {
   reportedOctas, makeNoise3, mulberry32, vertSliceFrame, vertSliceCentre, patchCentre,
 } from './sky.js';
 import {
-  layerField, layerArea, bakeType, bakeBlotches, prebake, TYPES, TYPE_ROWS,
+  layerField, bakeType, bakeBlotches, prebake, TYPES, TYPE_ROWS,
   BLOTCH_SCALE, BLOTCH_ANGLE, EARTH_R, DECODE_GLSL, TOWER_STEPS,
 } from './layer.js';
 import { solidField, solidSpheres, REACH_MAX, SOLID } from './cumulus.js';
@@ -1290,33 +1290,23 @@ function drawSkyMap() {
 // ================================================================ readouts
 
 const fmtOctas = (f) => (f * 8).toFixed(2);
-const fmtKm = (m) => (m === Infinity ? '∞' : m >= 10000 ? `${Math.round(m / 1000)} km` : m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
 
+// The report, under the sky map: the octas as reported and the sky
+// condition (with the base and CB/TCU on the cloud layer); the exact amount
+// on hover. (In the quiz, map and report stay hidden until answered.)
 function updateReadout() {
   const el = $('#readout');
-  if (mode === 'quiz' && !quiz.answered) {
-    el.innerHTML = '<div class="dim">How many octas?</div><div class="big">? / 8</div>';
-    return;
-  }
   const rep = reportedOctas(coveredFrac);
-  // On the cloud layer, also the cloud's real size: the same octas take a
-  // bigger cloud the higher the layer is.
-  const size = layerScene() && patchArea > 0
-    ? `<div class="dim">cloud on the layer: ${fmtArea(patchArea)}
-        (as a circle, ${fmtKm(2 * Math.sqrt(patchArea / Math.PI))} across)</div>`
-    : '';
-  el.innerHTML = `<div class="dim">Report</div>
-    <div class="big">${rep} / 8 <span class="term">${skyTerm(rep)}</span></div>
-    <div>${fmtOctas(coveredFrac)} octas exactly</div>
-    <div class="dim">${(coveredFrac * 100).toFixed(1)}% of the dome</div>${size}`;
+  let cond = skyTerm(rep);
+  if (layerScene() && rep > 0) {
+    const L = activeLayer();
+    cond = skyGroup(rep, Math.round(L.base / FT)) + (L.type === 'CB' || L.type === 'TCU' ? L.type : '');
+  }
+  el.innerHTML = `<span class="big">${rep}/8</span><span class="term">${cond}</span>`;
+  $('.skymap').title = `${fmtOctas(coveredFrac)} octas exactly (${(coveredFrac * 100).toFixed(1)}% of the sky)`;
 }
-let patchArea = 0;
 // MANOBS table 7-2: the amount term for a layer's summation amount
 const skyTerm = (octas) => (octas === 0 ? 'SKC' : octas <= 2 ? 'FEW' : octas <= 4 ? 'SCT' : octas < 8 ? 'BKN' : 'OVC');
-const fmtArea = (m2) => {
-  const km2 = m2 / 1e6;
-  return `${km2 >= 100 ? Math.round(km2).toLocaleString('en-CA') : km2 >= 10 ? km2.toFixed(0) : km2.toFixed(1)} km²`;
-};
 
 
 // ================================================================ update loop
@@ -1375,15 +1365,12 @@ function recompute() {
       solidScale = Number.isFinite(T) ? Math.max(0, -T) : 0;
       threshold = Number.isFinite(T) ? T : 1;
       coveredFrac = coverFromField(field, threshold, cover);
-      patchArea = 0;
       paintDome(true);
     } else {
       solidState = null;
       layerField(params, field);
       layerThreshold = solveThreshold(field, shownLayerOctas() / 8);
       coveredFrac = coverFromField(field, layerThreshold, cover);
-      // (for clouds with height the sky covered is no longer just their bases)
-      patchArea = TYPES[L.type]?.topM ? 0 : layerArea(cover, Math.max(1, L.base - EYE_M));
       paintDome(false);
     }
     updateCloudMeshes();
@@ -1557,6 +1544,33 @@ function bindHeight(id, key) {
   return { input, sync: place, set: (v) => { layerParams[key] = v; place(); } };
 }
 
+// Under the base slider, a little histogram of the bases observers report
+// for the type (climate.js), lined up with the slider.
+function drawBaseFreq() {
+  const cv = $('#lbase-freq');
+  const c = CLIMATE[layerParams.type];
+  const w = cv.clientWidth, h = 14, dpr = window.devicePixelRatio || 1;
+  if (!w) return;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  cv.style.visibility = c ? 'visible' : 'hidden';
+  if (!c) return;
+  const [lo, hi] = baseRangeFt(layerParams.type);
+  const pad = 8; // the thumb's half width: where the slider's ends are
+  const x = (ft) => pad + ((ft - lo) / (hi - lo)) * (w - 2 * pad);
+  const top = Math.max(...c.baseHist.map(([, k]) => k));
+  g.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--freq-bar').trim() || 'rgba(47,111,235,0.55)';
+  for (const [bin, k] of c.baseHist) {
+    if (bin + 500 <= lo || bin >= hi) continue;
+    const x0 = x(Math.max(lo, bin)), x1 = x(Math.min(hi, bin + 500));
+    const bh = Math.max(1, Math.sqrt(k / top) * (h - 2));
+    g.fillRect(x0, h - bh, Math.max(1, x1 - x0 - 0.5), bh);
+  }
+}
+window.addEventListener('resize', () => drawBaseFreq());
+
 const layerCtl = {
   base: bindHeight('lbase', 'base'),
   azimuth: bindRange('laz', layerParams, 'azimuth', (v) => `${v}°`),
@@ -1628,6 +1642,7 @@ function syncLayerControls() {
     $('#type-emp').textContent = climateLine(layerParams.type);
   }
   layerCtl.base.sync();
+  drawBaseFreq();
   syncLayerChips();
   dirty = true;
 }
@@ -1976,6 +1991,7 @@ $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
   const tab = b.dataset.tab;
   $$('.tabs button').forEach((x) => x.classList.toggle('on', x === b));
   $$('.tab').forEach((s) => { s.hidden = s.id !== `tab-${tab}`; });
+  if (tab === 'layer') requestAnimationFrame(drawBaseFreq); // now it has a width
   const prev = mode;
   let next = mode;
   if (tab === 'octas' || tab === 'layer' || tab === 'quiz') next = tab;

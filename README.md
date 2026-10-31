@@ -13,8 +13,9 @@ and is hosted on GitHub Pages without a build step.
   Plain geometry only; the covered area stays exactly fixed.
 - **Outside / Inside views:** orbit the translucent dome from outside, or
   stand at the observer's position and look around.
-- **All-sky map:** a flat map of the whole dome. In the equal-area
-  projection, area on the map is proportional to octas.
+- **All-sky map and report:** a flat map of the whole dome (equal-area, so
+  area on the map is proportional to octas), with the reported octas and the
+  sky condition (e.g. `SCT044`) under it; hover for the exact amount.
 - **Cloud layer tab:** one flat round patch on a flat cloud layer in the
   low, mid or high étage, sized to cover exactly the chosen octas of the
   dome. Azimuth and elevation (shared with the Celestial dome tab) place it.
