@@ -459,14 +459,8 @@ scene.add(groundLayer);
 //
 // The rest of the planet: the ground carries on past the horizon, curving
 // away below it, out to PLANET_M. It looks the same as the ground inside:
-// the horizon is the observer's, and the dome already marks it.
-//
-// FAR_M is a cutoff, not drawn: cloud-layer clouds farther than this from the
-// observer are drawn only as a trace. They sit within about a degree of the
-// horizon, too low to judge. 66 km is a working figure rather than a
-// standard one: a 4,000 ft cloud base 66 km away is only about 0.8 degrees
-// above the horizon.
-const FAR_M = 66000;
+// the horizon is the observer's, and the dome already marks it. Clouds are
+// drawn out to the farthest the observer can see them.
 const PLANET_M = 600000;
 function curvedRing(r0, r1, segments, rings) {
   const g = new THREE.RingGeometry(r0, r1, segments, rings);
@@ -539,7 +533,6 @@ const SURFACE_FRAG = `
   #include <logdepthbuf_pars_fragment>
   uniform vec3 color;
   uniform float metresPerUnit; // also the dome's radius in metres
-  uniform float farM; // cloud cutoff distance in metres
   varying vec2 vGround;
   ${LAYER_GLSL}
   void main() {
@@ -549,22 +542,20 @@ const SURFACE_FRAG = `
     vec3 s = normalize(vec3(vGround, layerHeight - d * d / 12742000.0));
     float r = region(s), rw = fwidth(r);
     float a = s.z < 0.0 ? 0.0 : layerCloud(r, rw, vGround, dFdx(vGround), dFdy(vGround));
-    // Only the cloud patch is drawn. Full brightness inside the dome,
-    // dimming with distance beyond it; past the cutoff (farM) only a trace
-    // of it shows.
+    // Only the cloud patch is drawn: full brightness inside the dome,
+    // dimming with distance beyond it.
     if (a < 0.01) discard;
     float dist = length(vec3(vGround, layerHeight));
     float far = smoothstep(1.0, 4.0, dist / metresPerUnit);
-    float beyond = smoothstep(0.92, 1.08, dist / farM);
     float th = layerShade(vGround);
     vec3 c = color * (1.0 - shadeAmt * th);
-    gl_FragColor = vec4(c * mix(1.0, 0.6, far), mix(mix(0.95, 0.75, far), 0.1, beyond) * a * layerAlpha(th));
+    gl_FragColor = vec4(c * mix(1.0, 0.6, far), mix(0.95, 0.75, far) * a * layerAlpha(th));
     #include <colorspace_fragment>
   }`;
 const layerSurface = new THREE.Mesh(
   new THREE.BufferGeometry(),
   new THREE.ShaderMaterial({
-    uniforms: { ...layerUniforms, metresPerUnit, farM: { value: FAR_M }, color: { value: new THREE.Color(0xeef1f5) } },
+    uniforms: { ...layerUniforms, metresPerUnit, color: { value: new THREE.Color(0xeef1f5) } },
     vertexShader: SURFACE_VERT,
     fragmentShader: SURFACE_FRAG,
     side: THREE.DoubleSide,
