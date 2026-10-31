@@ -254,40 +254,10 @@ code { font-size: 12.5px; background: var(--chip); padding: 1px 4px; border-radi
 .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; margin: 14px 0; }
 .pair > .field { margin: 0; min-width: 0; }
 
-/* Form slider: cumuli on the left, strati on the right, none in the middle */
-.form-ends {
-  display: flex; justify-content: space-between;
-  font-size: 12px; color: var(--ink-3); margin-top: 2px;
-}
-.form-ends span:nth-child(2) { position: relative; }
-.form-ends span:nth-child(2)::before {
-  content: ""; position: absolute; left: 50%; top: -9px; width: 1px; height: 6px; background: var(--ink-3);
-}
-/* centred slider: a plain track (no fill from the left), the thumb's side of
-   the centre tick is what matters */
-.form-slider input[type="range"] {
-  -webkit-appearance: none; appearance: none; background: transparent; height: 22px;
-}
-.form-slider input[type="range"]::-webkit-slider-runnable-track {
-  height: 4px; border-radius: 2px; background: var(--bar-track);
-}
-.form-slider input[type="range"]::-moz-range-track {
-  height: 4px; border-radius: 2px; background: var(--bar-track);
-}
-.form-slider input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none; width: 16px; height: 16px; margin-top: -6px;
-  border-radius: 50%; background: var(--accent); border: 2px solid var(--panel);
-}
-.form-slider input[type="range"]::-moz-range-thumb {
-  width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel);
-}
-.form-slider input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
 .view-switch button:disabled { opacity: .45; cursor: not-allowed; }
 
 /* explanatory notes sit at the very bottom of each tab's controls */
 .notes-bottom { margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--line); }
-.form-ends .off { opacity: 0.35; text-decoration: line-through; }
 
 /* cloud types, one row per étage */
 .types { display: grid; gap: 4px; }

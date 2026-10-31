@@ -9,9 +9,8 @@ and is hosted on GitHub Pages without a build step.
 - **Celestial dome tab:** the dome with 0–8 octas of cloud as a slice (an
   orange lying on its side, sliced between opposite horizon points) or a
   patch. Azimuth sets the horizon the cloud starts from and elevation
-  (0–180°) how far it has climbed, over the zenith and down the far side. A
-  Form slider breaks the shape into cumuli (left) or strati (right); the
-  covered area stays exactly fixed.
+  (0–180°) how far it has climbed, over the zenith and down the far side.
+  Plain geometry only; the covered area stays exactly fixed.
 - **Outside / Inside views:** orbit the translucent dome from outside, or
   stand at the observer's position and look around.
 - **All-sky map:** a flat map of the whole dome. In the equal-area

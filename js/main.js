@@ -17,22 +17,16 @@ const $$ = (s) => [...document.querySelectorAll(s)];
 // ================================================================ state
 
 // shape: 'lying' (slice) or 'cap' (patch), placed by azimuth and elevation
-// (see sky.js shapeField). form: one signed number for how the shape is broken up:
-// negative = cumuli, positive = strati, 0 = a plain shape; its size is the
-// strength. modifier and amount are derived from it (see setForm).
+// (see sky.js shapeField). Plain geometry: real cloud textures live on the
+// Cloud layer tab.
 const shapeParams = {
-  octas: 1, shape: 'lying', azimuth: 270, elevation: 25,
-  form: 0.3, modifier: 'strati', amount: 0.3, time: 0, seed: 1, animate: true,
+  octas: 1, shape: 'cap', azimuth: 270, elevation: 60,
+  modifier: 'none', amount: 0, time: 0, seed: 1,
 };
-function setForm(p, v) {
-  p.form = v;
-  p.modifier = v < 0 ? 'cumuli' : v > 0 ? 'strati' : 'none';
-  p.amount = Math.abs(v);
-}
 // The cloud layer: one round patch on a flat layer, plain or drawn as one of
 // the cloud types (layer.js TYPES), whose pattern lives on the layer.
 const layerParams = {
-  etage: 'low', shape: 'cap', azimuth: 270, elevation: 25, // round patch only
+  etage: 'low', shape: 'cap', azimuth: 270, elevation: 60, // round patch only
   type: 'plain', octas: 1, base: 4000 * FT, seed: 1,
 };
 let quizParams = null;
@@ -1138,14 +1132,7 @@ function recompute() {
 // Smooth move of the cloud base when the étage changes.
 let baseTween = null;
 
-let last = performance.now();
 function frame(now) {
-  const dt = Math.min(0.1, (now - last) / 1000);
-  last = now;
-  if (mode === 'octas' && shapeParams.animate && shapeParams.modifier !== 'none' && shapeParams.amount > 0) {
-    shapeParams.time += dt * 0.6;
-    dirty = true;
-  }
   runTweens(now);
   if (baseTween) {
     const t = Math.min(1, (now - baseTween.start) / baseTween.duration);
@@ -1210,29 +1197,6 @@ const domeCtl = {
   azimuth: bindRange('azimuth', shapeParams, 'azimuth', (v) => `${v}°`),
   elevation: bindRange('elevation', shapeParams, 'elevation', (v) => `${v}°`),
 };
-// The Form slider: cumuli to the left, strati to the right, none in the
-// middle. Values near the middle snap to exactly zero, so it is easy to find.
-const fmtForm = (v) => (v < 0 ? `cumuli ${(-v).toFixed(2)}` : v > 0 ? `strati ${v.toFixed(2)}` : 'none');
-function bindForm(id, p, after, minOf = () => -Infinity) {
-  const input = $(`#${id}`);
-  const out = $(`#${id}-out`);
-  const snap = 0.06 * parseFloat(input.max);
-  const show = () => { input.value = p.form; out.textContent = fmtForm(p.form); };
-  input.addEventListener('input', () => {
-    let v = parseFloat(input.value);
-    if (v < minOf()) v = minOf();
-    if (Math.abs(v) < snap) v = 0;
-    input.value = v;
-    const was = p.modifier;
-    setForm(p, v);
-    out.textContent = fmtForm(v);
-    after?.(was);
-    dirty = true;
-  });
-  show();
-  return { input, set: (v) => { setForm(p, v); show(); } };
-}
-domeCtl.form = bindForm('form', shapeParams);
 
 const chips = $('#octa-chips');
 for (let k = 0; k <= 8; k++) {
@@ -1274,14 +1238,6 @@ $$('#shape button').forEach((b) => b.addEventListener('click', () => {
 }));
 syncShape();
 
-// Freeze stops the outline drifting (only the Octas tab drifts).
-$('#freeze').addEventListener('click', (ev) => {
-  shapeParams.animate = !shapeParams.animate;
-  const frozen = !shapeParams.animate;
-  ev.currentTarget.textContent = frozen ? 'Unfreeze' : 'Freeze';
-  ev.currentTarget.setAttribute('aria-pressed', String(frozen));
-  ev.currentTarget.title = frozen ? 'Let the cloud outline drift again' : 'Stop the cloud outline drifting';
-});
 
 $$('#guides button').forEach((b) => b.addEventListener('click', () => setGuides(b.dataset.guides)));
 
@@ -1525,7 +1481,6 @@ function syncQuizLock() {
   out.title = locked ? 'Answer first: then you can step outside' : '';
   $('.skymap').classList.toggle('hidden', locked);
 }
-const syncFreeze = () => { $('#freeze').hidden = mode !== 'octas'; };
 $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
   const tab = b.dataset.tab;
   $$('.tabs button').forEach((x) => x.classList.toggle('on', x === b));
@@ -1552,7 +1507,6 @@ $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
     else easeOctasTo(mode === 'quiz' ? quizParams.octas : shapeParams.octas);
     if (mode === 'quiz' && !quiz.answered && view === 'outside') setView('inside');
     syncQuizLock();
-    syncFreeze();
     dirty = true;
     return;
   }
@@ -1569,7 +1523,6 @@ $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
     recompute();
     needsRender = true;
     syncQuizLock();
-    syncFreeze();
     canvasFade(1);
   }, REDUCED_MOTION ? 0 : 250);
 }));
