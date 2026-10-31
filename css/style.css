@@ -283,3 +283,6 @@ code { font-size: 12.5px; background: var(--chip); padding: 1px 4px; border-radi
 
 /* under the base slider: how often observers report each base */
 .freq-strip { display: block; width: 100%; height: 14px; margin-top: 2px; }
+
+/* hiding the controls hides the sky map and report too: the whole view for the sky */
+.app.full .skymap { opacity: 0; pointer-events: none; }
