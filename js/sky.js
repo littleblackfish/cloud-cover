@@ -46,11 +46,14 @@ export const OCTA_BAND_ELEVATIONS = Array.from({ length: 9 }, (_, k) => elevatio
 
 // A true covered fraction as reported octas, by MANOBS 7.3: an amount
 // between two reportable values is reported as the greater (so any cloud at
-// all is at least 1), and 8 only when no gap is left (7 otherwise).
+// all is at least 1), and 8 only when no gap is left (7 otherwise). The
+// computed amount can sit a hair over a whole octa (the sky grid's cells do
+// not split exactly), so anything within 0.01 octa of one counts as it.
+const OCTA_TOL = 0.01;
 export function reportedOctas(frac) {
   if (frac <= 1e-6) return 0;
-  if (frac >= 1 - 1e-6) return 8;
-  return Math.min(7, Math.max(1, Math.ceil(frac * 8 - 1e-6)));
+  if (frac >= 1 - OCTA_TOL / 8) return 8;
+  return Math.min(7, Math.max(1, Math.ceil(frac * 8 - OCTA_TOL)));
 }
 
 // ---------------------------------------------------------------- noise
