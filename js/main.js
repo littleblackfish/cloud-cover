@@ -9,6 +9,7 @@ import {
   BLOTCH_SCALE, BLOTCH_ANGLE, EARTH_R, DECODE_GLSL, TOWER_STEPS,
 } from './layer.js';
 import { solidField, solidSpheres, REACH_MAX, SOLID } from './cumulus.js';
+import { dayOfYear, solarDay, halfDay, sunPosition, utcMinutes } from './sun.js';
 
 const DEG = Math.PI / 180;
 const FT = 0.3048; // metres per foot
@@ -295,6 +296,7 @@ const domeUniforms = {
   cloudColor: { value: new THREE.Color().setRGB(244 / 255, 246 / 255, 249 / 255, THREE.SRGBColorSpace) },
   topColor: { value: new THREE.Color().setRGB(250 / 255, 251 / 255, 253 / 255, THREE.SRGBColorSpace) },
   skyAlpha: { value: 0.2 },
+  sunEnu: { value: new THREE.Vector3(0, -0.5, 0.8).normalize() },
   cloudAlpha: { value: 0.93 },
 };
 const dome = new THREE.Mesh(
@@ -318,6 +320,7 @@ const dome = new THREE.Mesh(
     fragmentShader: `
       uniform sampler2D field;
       uniform float threshold, skyAlpha, cloudAlpha;
+      uniform vec3 sunEnu; // the sun's direction: east, north, up
       uniform vec3 skyColor, cloudColor, topColor;
       uniform int layerOn, solidOn;
       uniform float projection;
@@ -358,7 +361,15 @@ const dome = new THREE.Mesh(
           a = smoothstep(threshold - w, threshold + w, f);
           if (solidOn == 1) a *= projection;
         }
-        gl_FragColor = vec4(mix(skyColor, cc * (1.0 - shade), a), mix(skyAlpha, cloudAlpha, a));
+        // the sun: a disc (drawn twice its real size, to be seen) with a glow,
+        // behind any cloud
+        vec3 sd = normalize(vec3(vDir.x, -vDir.z, vDir.y));
+        float cs = sd.z < 0.0 ? 0.0 : max(dot(sd, sunEnu), 0.0);
+        float disc = smoothstep(${Math.cos(0.6 * DEG).toFixed(8)}, ${Math.cos(0.45 * DEG).toFixed(8)}, cs);
+        float glow = 0.5 * pow(cs, 800.0) + 0.12 * pow(cs, 60.0);
+        vec3 sky = mix(skyColor + glow * vec3(1.0, 0.95, 0.85), vec3(1.0, 0.98, 0.92), disc);
+        float sa = max(skyAlpha, max(disc, glow));
+        gl_FragColor = vec4(mix(sky, cc * (1.0 - shade), a), mix(sa, cloudAlpha, a));
         #include <colorspace_fragment>
       }`,
   }),
@@ -634,10 +645,10 @@ layerSurface.userData.radius = 0;
 scene.add(layerSurface);
 
 // Solid clouds (cumulus.js): spheres, flattened a little, their surfaces
-// lumped a little with Perlin noise, cut flat at the base, lit by the sun
-// from the south-west. Near clouds are drawn with finer
+// lumped a little with Perlin noise, cut flat at the base, lit by the sun. Near clouds are drawn with finer
 // spheres than far ones. Looking up into a cut sphere shows its inside: that
 // is the flat, dark base.
+// (the sun's direction in the scene: set by the sun controls)
 const SUN = toScene(Math.sin(220 * DEG) * Math.cos(40 * DEG), Math.cos(220 * DEG) * Math.cos(40 * DEG), Math.sin(40 * DEG)).normalize();
 const solidUniforms = {
   litCol: { value: new THREE.Color() },
@@ -785,13 +796,23 @@ function updateSolidMeshes(show) {
     m.instanceMatrix.needsUpdate = true;
     base.needsUpdate = top.needsUpdate = true;
   }
-  const look = SOLID_LOOK[activeLayer().type];
-  const set = (u, rgb) => u.value.setRGB(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255, THREE.SRGBColorSpace);
-  set(solidUniforms.litCol, look.lit);
-  set(solidUniforms.shadeCol, look.shade);
-  set(solidUniforms.baseCol, look.base);
+  solidLook();
   solidUniforms.bumpM.value = SOLID[activeLayer().type].R0 * 0.09;
   solidUniforms.lumpM.value = SOLID[activeLayer().type].R0 * 0.3;
+}
+// The solid clouds' colours: the type's, with the sunlit side warmer and
+// everything a little dimmer when the sun is low.
+function solidLook() {
+  const look = SOLID_LOOK[activeLayer().type];
+  if (!look) return;
+  const low = Math.max(0, 1 - sunState.el / (15 * DEG));
+  const warm = [255, 206, 160];
+  const lit = look.lit.map((v, i) => v + (warm[i] - v) * 0.55 * low);
+  const dim = 1 - 0.25 * low;
+  const set = (u, rgb, k = 1) => u.value.setRGB((rgb[0] * k) / 255, (rgb[1] * k) / 255, (rgb[2] * k) / 255, THREE.SRGBColorSpace);
+  set(solidUniforms.litCol, lit);
+  set(solidUniforms.shadeCol, look.shade, dim);
+  set(solidUniforms.baseCol, look.base, dim);
 }
 // sunlit tops, shaded sides and bases (sRGB)
 const SOLID_LOOK = {
@@ -1659,6 +1680,93 @@ setTimeout(() => {
   bakeBlotches(layerParams.seed);
 }, 1500);
 syncLayerControls();
+
+// ---------------------------------------------------------------- sun
+//
+// The sun lights the solid clouds and shows in the sky. Its place comes from
+// a latitude (50 N unless the browser gives a location), a date (a season's
+// equinox or solstice, or any date) and the time of day, from sunrise to
+// sunset. Without a longitude, times are local solar time.
+const SEASONS = { spring: [2, 20], summer: [5, 21], autumn: [8, 22], winter: [11, 21] }; // month (0-based), day
+const sunState = { lat: 50, lon: null, date: null, t: 0.4, el: 40 * DEG, az: 220 * DEG, season: 'summer' };
+const pad2 = (v) => String(v).padStart(2, '0');
+function fmtClock(minutesUtc) {
+  const d = sunState.date;
+  if (sunState.lon === null) {
+    // local solar time: noon when the sun is due south
+    const m = ((minutesUtc % 1440) + 1440) % 1440;
+    return `${pad2(Math.floor(m / 60))}:${pad2(Math.floor(m % 60))}`;
+  }
+  const at = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0) + minutesUtc * 60000);
+  return at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+function updateSun() {
+  const s = sunState;
+  const { decl, eot } = solarDay(dayOfYear(s.date));
+  const h0 = halfDay(s.lat, decl);
+  const timeInput = $('#sun-time');
+  timeInput.disabled = h0 === 0;
+  const h = -h0 + s.t * 2 * h0;
+  const pos = sunPosition(s.lat, decl, h);
+  s.el = pos.el;
+  s.az = pos.az;
+  // without a longitude, clock = local solar time (noon at h = 0)
+  const clock = (hh) => fmtClock(s.lon === null ? 720 + (hh / DEG) * 4 : utcMinutes(hh, s.lon, eot));
+  if (h0 === 0) {
+    $('#sun-out').textContent = 'below the horizon all day';
+    $('#sun-rise').textContent = $('#sun-set').textContent = '';
+  } else {
+    $('#sun-out').textContent = `${clock(h)} · ${Math.round(pos.el / DEG)}° up, ${Math.round(pos.az / DEG)}°`;
+    $('#sun-rise').textContent = h0 >= Math.PI ? 'midnight sun' : `sunrise ${clock(-h0)}`;
+    $('#sun-set').textContent = h0 >= Math.PI ? '' : `sunset ${clock(h0)}`;
+  }
+  // east, north, up
+  const e = Math.sin(pos.az) * Math.cos(pos.el), n = Math.cos(pos.az) * Math.cos(pos.el), u = Math.sin(pos.el);
+  domeUniforms.sunEnu.value.set(e, n, u).normalize();
+  SUN.copy(toScene(e, n, u)).normalize();
+  solidLook();
+  needsRender = true;
+}
+function setSunDate(date, season = null) {
+  sunState.date = date;
+  sunState.season = season;
+  $$('#season button').forEach((b) => b.classList.toggle('on', b.dataset.season === season));
+  $('#sun-date').value = `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`;
+  updateSun();
+}
+const seasonDate = (k) => new Date(Date.UTC(new Date().getFullYear(), SEASONS[k][0], SEASONS[k][1], 12));
+$$('#season button').forEach((b) => b.addEventListener('click', () => setSunDate(seasonDate(b.dataset.season), b.dataset.season)));
+$('#sun-date').addEventListener('change', (ev) => {
+  const [y, m, d] = ev.target.value.split('-').map(Number);
+  if (y && m && d) setSunDate(new Date(Date.UTC(y, m - 1, d, 12)));
+});
+$('#sun-time').addEventListener('input', (ev) => {
+  sunState.t = parseFloat(ev.target.value) / 1000;
+  updateSun();
+});
+function showPlace() {
+  const s = sunState;
+  $('#sun-place').textContent = s.lon === null
+    ? `Latitude ${s.lat}° N (a typical Canadian latitude); times are local solar time.`
+    : `${Math.abs(s.lat).toFixed(2)}° ${s.lat >= 0 ? 'N' : 'S'}, ${Math.abs(s.lon).toFixed(2)}° ${s.lon >= 0 ? 'E' : 'W'}; times are this device's clock time.`;
+}
+$('#sun-locate').addEventListener('click', () => {
+  if (!navigator.geolocation) { $('#sun-place').textContent = 'This browser cannot give a location.'; return; }
+  $('#sun-place').textContent = 'Asking for your location…';
+  navigator.geolocation.getCurrentPosition((p) => {
+    sunState.lat = Math.round(p.coords.latitude * 100) / 100;
+    sunState.lon = Math.round(p.coords.longitude * 100) / 100;
+    showPlace();
+    // today, at this place
+    const now = new Date();
+    setSunDate(new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), 12)));
+  }, () => {
+    showPlace();
+    $('#sun-place').textContent += ' (Location not available.)';
+  }, { maximumAge: 3600000, timeout: 15000 });
+});
+showPlace();
+setSunDate(seasonDate('summer'), 'summer');
 
 // ---------------------------------------------------------------- quiz
 //

@@ -35,6 +35,10 @@ and is hosted on GitHub Pages without a build step.
   1.7 m up, a dome whose radius is the distance to their horizon (4.65 km),
   the ground inside it, and the layer drawn out to the observer's line of
   sight. Each type has its own grey; a plain patch takes its étage's.
+- **Sun:** set by season (equinox or solstice at 50° N) or by your location
+  and any date, with a slider from sunrise to sunset (times from NOAA's solar
+  formulas; local solar time without a location). It shows in the sky,
+  behind the clouds, and lights the solid clouds, warmer and dimmer when low.
 - **Quiz tab:** a random sky of one cloud type (any of the drawable types)
   at a base around its usual one, covering a random, usually fractional,
   amount. You start inside, looking straight up with the whole sky in view
@@ -86,6 +90,7 @@ No internet access is needed at runtime: three.js is vendored in `vendor/`
   equal-area threshold solver and octa rounding
 - `js/layer.js`: cloud-layer field (shape + texture on the layer)
 - `js/cumulus.js`: solid cumuliform clouds (layout, shapes, exact coverage)
+- `js/sun.js`: the sun's position (declination, equation of time, sunrise and sunset)
 - `js/main.js`: 3D scene, all-sky map and UI
 
 ## Caveat

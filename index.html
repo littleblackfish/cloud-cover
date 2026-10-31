@@ -128,6 +128,23 @@
           <input type="range" id="lbase" min="100" max="39000" step="100" value="4000">
         </label>
 
+        <div class="field sun">
+          <span>Sun <output id="sun-out"></output></span>
+          <div class="seg" id="season">
+            <button data-season="spring">Spring</button>
+            <button data-season="summer" class="on">Summer</button>
+            <button data-season="autumn">Autumn</button>
+            <button data-season="winter">Winter</button>
+          </div>
+          <div class="row sun-where">
+            <button id="sun-locate" title="Use this device's location (the browser asks first)">Use my location</button>
+            <input type="date" id="sun-date" aria-label="Date">
+          </div>
+          <p class="help" id="sun-place"></p>
+          <input type="range" id="sun-time" min="0" max="1000" step="1" value="400" aria-label="Time of day, sunrise to sunset">
+          <div class="sun-ends" aria-hidden="true"><span id="sun-rise"></span><span id="sun-set"></span></div>
+        </div>
+
         <div class="notes-bottom">
           <p class="help" id="genus"></p>
           <p class="help">

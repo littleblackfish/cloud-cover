@@ -273,3 +273,10 @@ code { font-size: 12.5px; background: var(--chip); padding: 1px 4px; border-radi
 .type-chips button.right:disabled, .type-chips button.wrong:disabled { opacity: 1; cursor: default; }
 .quiz-base { font-size: 15px; margin: 12px 0 4px; min-height: 30px; }
 .quiz-base button { font: inherit; font-size: 13px; border: 1px solid var(--line); background: var(--chip); color: var(--ink); padding: 5px 10px; border-radius: 6px; cursor: pointer; }
+
+/* sun controls */
+.sun .seg { margin-bottom: 6px; }
+.sun-where { margin: 6px 0; }
+.sun-where input[type="date"] { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--chip); color: var(--ink); }
+.sun-ends { display: flex; justify-content: space-between; font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+#sun-place { margin: 2px 0 6px; }
