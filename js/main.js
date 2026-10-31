@@ -1159,7 +1159,7 @@ function setView(v, { yaw, pitch = 25 * DEG, reset = false, instant = false } = 
   const a0 = domeUniforms.skyAlpha.value, a1 = v === 'inside' ? 0.62 : 0.2;
   const p0 = domeUniforms.projection.value, p1 = v === 'inside' ? 0 : 1;
   // ... and the view turns stereographic (see renderStereo)
-  const s0 = stereoUniforms.stereo.value, s1 = v === 'inside' ? 1 : 0;
+  const s0 = stereoUniforms.stereo.value, s1 = v === 'inside' ? STEREO_INSIDE : 0;
   animate('sky', ms, (e) => {
     domeUniforms.skyAlpha.value = a0 + (a1 - a0) * e;
     domeUniforms.projection.value = p0 + (p1 - p0) * e;
@@ -1205,6 +1205,9 @@ canvas.addEventListener('pointerup', () => { look.drag = null; });
 // The observer's field of view is fixed (no zoom): any wider and the
 // projection distorts the sky noticeably.
 const OBSERVER_FOV = 80;
+// The observer's lens: 0 ordinary perspective, 1 stereographic (see the
+// stereographic view below). Perspective for now, to compare.
+const STEREO_INSIDE = 0;
 
 // ---------------------------------------------------------------- device motion
 //
