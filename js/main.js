@@ -1933,11 +1933,10 @@ function newQuiz(instant = false) {
   const clim = CLIMATE[type];
   const n = rnd() < 0.04 ? 0 : clim ? 1 + pickWeighted(rnd, clim.octas) : 1 + Math.floor(rnd() * 8);
   let frac;
+  // a true amount that reports as n (MANOBS rounds up: n - 1 < 8 frac <= n)
   if (n === 0) frac = 0;
   else if (n === 8) frac = 1;
-  else if (n === 1) frac = 0.01 + rnd() * (1.5 / 8 - 0.01);
-  else if (n === 7) frac = 6.5 / 8 + rnd() * (1.5 / 8 - 0.01);
-  else frac = (n - 0.5 + rnd() * 0.999) / 8;
+  else frac = (n - 1 + 0.03 + rnd() * 0.94) / 8;
   // base: from the type's reported bases (500 ft bins), within the MANOBS range
   let ft = t.baseFt;
   if (clim) {

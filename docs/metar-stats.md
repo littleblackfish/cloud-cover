@@ -44,7 +44,7 @@ Stations: CYVR CYYJ CYXS CYXY CYZF CYVQ CYFB CYYC CYEG CYMM CYXE CYQR CYWG CYQT 
 
 ## Caveats
 
-- The octas are the numbers in the type remarks (e.g. `SC4`). Check in MANOBS whether these are a layer's amount or its opacity; for a single opaque layer they should agree.
+- The octas are the numbers in the type remarks (e.g. `SC4`): each layer's own amount. MANOBS (8th edition, amendment 3, 2026) shows this in its example `SCT090 BKN110 ... RMK AC3AC2`: the sky groups give summation amounts (7.3, rule 3: 3, then 3 + 2 = 5), the remarks each layer's.
 - High-cloud bases are mostly estimated, not measured, and cluster at round values (e.g. 25,000 ft).
 - When a layer holds cumulonimbus, the remark can name CB for the whole layer, which is why single-layer CB is so often 7–8 octas.
 - Reports where the remark codes and sky groups do not pair one-to-one (obscurations, extra codes) are left out.

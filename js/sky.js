@@ -44,12 +44,13 @@ export const elevationForFraction = (f) => Math.asin(Math.min(1, Math.max(0, f))
 // Elevations that split the dome into eight equal-area horizontal bands.
 export const OCTA_BAND_ELEVATIONS = Array.from({ length: 9 }, (_, k) => elevationForFraction(k / 8));
 
-// WMO / MANOBS style rounding of a true covered fraction to reported octas:
-// any cloud at all is at least 1, any gap at all is at most 7.
+// A true covered fraction as reported octas, by MANOBS 7.3: an amount
+// between two reportable values is reported as the greater (so any cloud at
+// all is at least 1), and 8 only when no gap is left (7 otherwise).
 export function reportedOctas(frac) {
   if (frac <= 1e-6) return 0;
   if (frac >= 1 - 1e-6) return 8;
-  return Math.min(7, Math.max(1, Math.round(frac * 8)));
+  return Math.min(7, Math.max(1, Math.ceil(frac * 8 - 1e-6)));
 }
 
 // ---------------------------------------------------------------- noise
