@@ -1496,13 +1496,8 @@ function syncChips() {
 }
 syncChips();
 
-const shapeHelp = {
-  lying: 'An orange lying on its side: each slice runs between two opposite horizon points, over the sky, and every eighth of the turn is one octa. The cloud rises from the horizon at the azimuth; elevation slides it up, over the zenith, and down the far side.',
-  cap: 'A round patch, centred at the azimuth and elevation (past 90° it has crossed the zenith). Lower it toward the horizon: the horizon clips it and it stretches to keep its area.',
-};
 function syncShape() {
   $$('#shape button').forEach((b) => b.classList.toggle('on', b.dataset.shape === shapeParams.shape));
-  $('#shape-help').textContent = shapeHelp[shapeParams.shape];
 }
 function setGuides(g) {
   guides = g;
@@ -1572,16 +1567,31 @@ const lchips = $('#lcover-chips');
 for (let k = 0; k <= 8; k++) {
   const b = document.createElement('button');
   b.textContent = k;
-  b.addEventListener('click', () => {
-    layerParams.octas = k;
-    syncLayerChips();
-    const from = layerOctasShown;
-    animate('layerOctas', 700, (e) => { layerOctasShown = from + (k - from) * e; dirty = true; });
-  });
+  b.addEventListener('click', () => setLayerOctas(k));
   lchips.append(b);
 }
+function setLayerOctas(k) {
+  layerParams.octas = k;
+  syncLayerChips();
+  const from = layerOctasShown;
+  animate('layerOctas', 700, (e) => { layerOctasShown = from + (k - from) * e; dirty = true; });
+}
+// For a cloud type, each amount's button is filled from below by how often
+// observers report it (climate.js); amounts never reported, or that solid
+// clouds cannot reach (8: separate heaps never close every gap), are off.
 function syncLayerChips() {
-  [...lchips.children].forEach((b, k) => b.classList.toggle('on', layerParams.octas === k));
+  const code = layerParams.type;
+  const c = CLIMATE[code];
+  const top = c ? Math.max(...c.octas) : 1;
+  [...lchips.children].forEach((b, k) => {
+    b.classList.toggle('on', layerParams.octas === k);
+    const f = c && k > 0 ? c.octas[k - 1] : null;
+    b.classList.toggle('freq', f !== null);
+    b.style.setProperty('--f', f === null ? 0 : f / top);
+    b.disabled = k > 0 && ((f !== null && f < 0.05) || (k === 8 && !!TYPES[code]?.solid));
+    b.title = f === null ? '' : b.disabled ? 'not reported, or not possible for this type'
+      : `${f.toFixed(1)}% of ${code} reports`;
+  });
   $('#lcover-out').textContent = `${layerParams.octas}/8`;
 }
 $$('#units button').forEach((b) => b.addEventListener('click', () => {
@@ -1591,31 +1601,32 @@ $$('#units button').forEach((b) => b.addEventListener('click', () => {
   layerCtl.base.sync();
 }));
 
-// Typical base for each étage (ft; frames the outside view), and the clouds
-// you would find there.
+// Typical base for each étage (ft; frames the outside view).
 const ETAGE_BASE_FT = { low: 4000, mid: 12000, high: 28000 };
-const GENUS = {
-  low: 'Low étage: cumulus (Cu), stratocumulus (Sc), stratus (St); cumulonimbus (Cb) and nimbostratus (Ns) bases are low too.',
-  mid: 'Mid étage: altocumulus (Ac) and altostratus (As).',
-  high: 'High étage: cirrus (Ci), cirrocumulus (Cc) and cirrostratus (Cs).',
+// The amount reported most often for a type (climate.js), 1..8.
+const usualOctas = (code) => {
+  const c = CLIMATE[code];
+  return c ? c.octas.indexOf(Math.max(...c.octas)) + 1 : null;
 };
-
-// What Canadian observers report for a type (climate.js), in a sentence.
+// What Canadian observers report for a type, in a sentence.
 function climateLine(code) {
   const c = CLIMATE[code];
   if (!c) return '';
   const ft = (v) => v.toLocaleString('en-CA');
-  const most = c.octas.indexOf(Math.max(...c.octas)) + 1;
-  return `In Canadian reports (2023–24, as the only layer, ${ft(c.n)} reports): base usually
-    ${ft(c.base[1])}–${ft(c.base[3])} ft (median ${ft(c.base[2])}); most often ${most} octa${most > 1 ? 's' : ''}.`;
+  const most = usualOctas(code);
+  return `In Canadian METARs (2023–24, ${ft(c.n)} reports with it as the only layer), its base is usually
+    ${ft(c.base[1])}–${ft(c.base[3])} ft and it most often covers ${most} octa${most > 1 ? 's' : ''}
+    (${Math.round(c.octas[most - 1])}% of reports).`;
 }
 function syncLayerControls() {
-  $('#genus').textContent = GENUS[layerParams.etage];
   const t = TYPES[layerParams.type];
   $$('#ltypes button').forEach((b) => b.classList.toggle('on', b.dataset.type === layerParams.type));
   $('#ltype-out').textContent = t ? `${layerParams.type} · ${t.name}` : 'plain patch';
-  $('#type-help').textContent = t ? `${t.help} ${climateLine(layerParams.type)}`
-    : 'A plain round patch: pick a cloud type to see how it looks from the ground.';
+  $('#type-info').hidden = !t;
+  if (t) {
+    $('#type-std').textContent = t.help;
+    $('#type-emp').textContent = climateLine(layerParams.type);
+  }
   layerCtl.base.sync();
   syncLayerChips();
   dirty = true;
@@ -1634,7 +1645,6 @@ function followEtage() {
   layerParams.etage = etage;
   const s0 = viewScaleWanted, s1 = layerViewScale();
   animate('viewScale', 1500, (e) => { viewScaleWanted = s0 + (s1 - s0) * e; });
-  $('#genus').textContent = GENUS[etage];
 }
 
 // Cloud types, by étage. Picking one fades the old pattern out and the new
@@ -1675,7 +1685,12 @@ for (const [etage, codes] of TYPE_ROWS) {
 function setType(code) {
   if (code === layerParams.type) return;
   const t = TYPES[code];
-  if (t) glideBase(t.baseFt, code);
+  if (t) {
+    // the most likely amount and base for this type
+    glideBase(t.baseFt, code);
+    const k = usualOctas(code);
+    if (k) setLayerOctas(TYPES[code].solid ? Math.min(7, k) : k);
+  }
   animate('typeFade', 250, (e) => { layerUniforms.layerFade.value = 1 - e; }, () => {
     layerParams.type = code;
     syncLayerControls();
@@ -1757,8 +1772,8 @@ $('#sun-time').addEventListener('input', (ev) => {
 function showPlace() {
   const s = sunState;
   $('#sun-place').textContent = s.lon === null
-    ? `Latitude ${s.lat}° N (a typical Canadian latitude); times are local solar time.`
-    : `${Math.abs(s.lat).toFixed(2)}° ${s.lat >= 0 ? 'N' : 'S'}, ${Math.abs(s.lon).toFixed(2)}° ${s.lon >= 0 ? 'E' : 'W'}; times are this device's clock time.`;
+    ? `${s.lat}° N · local solar time`
+    : `${Math.abs(s.lat).toFixed(2)}° ${s.lat >= 0 ? 'N' : 'S'}, ${Math.abs(s.lon).toFixed(2)}° ${s.lon >= 0 ? 'E' : 'W'} · local clock time`;
 }
 $('#sun-locate').addEventListener('click', () => {
   if (!navigator.geolocation) { $('#sun-place').textContent = 'This browser cannot give a location.'; return; }

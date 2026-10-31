@@ -280,3 +280,14 @@ code { font-size: 12.5px; background: var(--chip); padding: 1px 4px; border-radi
 .sun-where input[type="date"] { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--chip); color: var(--ink); }
 .sun-ends { display: flex; justify-content: space-between; font-size: 12px; color: var(--ink-3); margin-top: 2px; }
 #sun-place { margin: 2px 0 6px; }
+
+/* octa buttons for a cloud type: filled from below by how often observers
+   report that amount */
+.chips button.freq:not(.on) {
+  background-image: linear-gradient(to top, var(--freq-fill) calc(var(--f) * 100%), transparent calc(var(--f) * 100%));
+}
+:root { --freq-fill: rgba(47, 111, 235, 0.3); }
+/* a cloud type's description: the standard, and what observers report */
+.type-info { margin-top: 8px; font-size: 13px; line-height: 1.4; color: var(--ink-2); }
+.type-info p { margin: 4px 0; }
+.type-info .tag { display: inline-block; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-3); margin-right: 4px; }

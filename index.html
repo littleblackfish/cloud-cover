@@ -37,10 +37,6 @@
         title="Hide the controls">Hide controls</button>
     </div>
     <aside class="panel" id="panel">
-      <header>
-        <h1>Celestial Dome Octas</h1>
-        <p class="sub">See what 0–8 eighths of the sky really look like.</p>
-      </header>
 
       <nav class="tabs" role="tablist">
         <button role="tab" data-tab="octas" class="on">Celestial dome</button>
@@ -81,15 +77,6 @@
             <button data-guides="lying" class="on">8 vertical slices</button>
           </div>
         </fieldset>
-
-        <div class="notes-bottom">
-          <p class="help" id="shape-help"></p>
-          <p class="help">
-            Azimuth is the horizon the cloud starts from; elevation is how far
-            it has climbed from there, over the zenith at 90° and down the far
-            side. The covered area stays exactly as chosen.
-          </p>
-        </div>
       </section>
 
       <!-- ===================================================== LAYER -->
@@ -102,7 +89,10 @@
         <div class="field">
           <span>Cloud type <output id="ltype-out"></output></span>
           <div class="types" id="ltypes"></div>
-          <p class="help" id="type-help"></p>
+          <div class="type-info" id="type-info" hidden>
+            <p><span class="tag">Standard</span> <span id="type-std"></span></p>
+            <p><span class="tag">Empirical</span> <span id="type-emp"></span></p>
+          </div>
         </div>
 
         <div class="pair">
@@ -144,36 +134,6 @@
           <input type="range" id="sun-time" min="0" max="1000" step="1" value="400" aria-label="Time of day, sunrise to sunset">
           <div class="sun-ends" aria-hidden="true"><span id="sun-rise"></span><span id="sun-set"></span></div>
         </div>
-
-        <div class="notes-bottom">
-          <p class="help" id="genus"></p>
-          <p class="help">
-            The layer is a flat plane parallel to the ground, and the cloud
-            is one flat round patch on it, placed in your sky by
-            azimuth and elevation (past 90° it crosses the zenith). Lower it
-            and the patch becomes a long oval far off. The patch is sized so
-            it covers exactly the chosen octas of the dome, at any height, so
-            the same octas take a bigger cloud the higher the layer: the
-            readout shows its real size on the layer. A cloud type's pattern
-            lies on the layer itself, so its elements crowd together toward
-            the horizon, and the same cloud looks smaller the higher it is.
-          </p>
-          <p class="help">
-            One cloud layer, parallel to the ground, seen by the observer at
-            the centre. Everything is to scale: the observer's eye is 1.7 m
-            up, and the dome stands on their horizon, 4.65 km away, so the
-            ground inside it is all the ground they can see. Clouds sit at
-            their real heights: low ones inside the dome, higher ones above
-            it. They are drawn out to where the observer's line of sight,
-            grazing the horizon, still reaches them: about 130 km for a
-            4,000 ft layer. Everything follows the Earth's curve. Beyond the
-            horizon the rest of the planet is drawn faintly. Clouds more than
-            66 km away sit within about a degree of the horizon, so they are
-            drawn only as a trace (they still count toward the octas). Each étage has its own shade:
-            low clouds greyest, high clouds nearly white. The view pulls back
-            as the layer rises.
-          </p>
-        </div>
       </section>
 
       <!-- ===================================================== QUIZ -->
@@ -195,18 +155,6 @@
         </div>
         <p class="quiz-result" id="quiz-result" aria-live="polite"></p>
         <p class="score" id="quiz-score"></p>
-
-        <div class="notes-bottom">
-          <p class="help">
-            A random sky: one layer of one cloud type at a typical base for
-            that type. The hint gives its base, as a ceilometer would. You
-            stand under the layer looking straight up, with the whole sky in
-            view; drag to look around, scroll to change the field of view.
-            Estimate the amount, and the type if you like, then check. The
-            guides, the outside view and the sky map open once you have
-            answered.
-          </p>
-        </div>
       </section>
 
     </aside>
