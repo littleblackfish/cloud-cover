@@ -1118,8 +1118,9 @@ function setView(v, { yaw, pitch = 25 * DEG, reset = false, instant = false } = 
   const from = view;
   view = v;
   dirty = true; // what is drawn can depend on the view (clouds with height)
+  // on a phone or tablet the observer view follows the device
+  if (v === 'inside' && hasMotionSensors && !motion.on) setMotion(true);
   if (v !== 'inside' && motion.on) setMotion(false);
-  syncMotionButton();
   $$('.view-switch [data-view]').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
   orbit.enabled = false;
   const ms = instant ? 0 : 1200;
@@ -1184,7 +1185,10 @@ function keepOutsideAngle() {
 }
 
 canvas.addEventListener('pointerdown', (ev) => {
-  if (view !== 'inside' || motion.on) return;
+  if (view !== 'inside') return;
+  // a tap may be needed to start the sensors (iOS asks only from a tap)
+  if (hasMotionSensors && !motion.on) setMotion(true);
+  if (motion.on && motion.has) return;
   look.drag = { x: ev.clientX, y: ev.clientY };
   canvas.setPointerCapture(ev.pointerId);
 });
@@ -1204,14 +1208,15 @@ const OBSERVER_FOV = 80;
 
 // ---------------------------------------------------------------- device motion
 //
-// In the observer view, on a phone or tablet, the view can follow the
-// device: hold it up and look around the sky. The device's orientation
+// In the observer view, on a phone or tablet, the view follows the device
+// (no button): hold it up and look around the sky. Until the sensors give a
+// reading (or if they are refused), dragging still works. The device's orientation
 // (alpha, beta, gamma: the deviceorientation event) becomes the camera's,
 // as three.js's old DeviceOrientationControls did. With a compass heading
 // (Android's deviceorientationabsolute, iOS's webkitCompassHeading) the
 // view's north is the real north; without one, north is wherever the
 // device pointed when the sensor started.
-const motion = { on: false, has: false, q: new THREE.Quaternion() };
+const motion = { on: false, has: false, pending: false, refused: false, q: new THREE.Quaternion() };
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
 const motionEuler = new THREE.Euler();
 const qScreen = new THREE.Quaternion();
@@ -1229,28 +1234,27 @@ function onOrientation(ev) {
 }
 const hasMotionSensors = typeof DeviceOrientationEvent !== 'undefined'
   && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
-function syncMotionButton() {
-  const b = $('#motion');
-  b.hidden = !(hasMotionSensors && view === 'inside');
-  b.classList.toggle('on', motion.on);
-}
 async function setMotion(on) {
+  if (on && (motion.pending || motion.refused)) return;
   if (on && typeof DeviceOrientationEvent.requestPermission === 'function') {
-    // iOS asks first, and only from a tap
-    try {
-      if (await DeviceOrientationEvent.requestPermission() !== 'granted') on = false;
-    } catch { on = false; }
+    // iOS asks first, and only from a tap (asked otherwise, it throws: the
+    // next tap on the view asks again); a refusal is final
+    motion.pending = true;
+    let answer = 'error';
+    try { answer = await DeviceOrientationEvent.requestPermission(); } catch { /* not from a tap */ }
+    motion.pending = false;
+    if (answer === 'denied') motion.refused = true;
+    if (answer !== 'granted') on = false;
+    if (on && view !== 'inside') return; // left the observer view meanwhile
   }
   motion.on = on;
   motion.has = false;
   if (on) window.addEventListener(motionEvent, onOrientation);
   else window.removeEventListener(motionEvent, onOrientation);
-  look.drag = null;
-  $('#view-hint').textContent = on ? 'Move the device to look around' : 'Drag to look around';
-  syncMotionButton();
+  if (on) look.drag = null;
+  if (view === 'inside') $('#view-hint').textContent = on ? 'Move the device to look around' : 'Drag to look around';
   needsRender = true;
 }
-$('#motion').addEventListener('click', () => setMotion(!motion.on));
 
 // ---------------------------------------------------------------- stereographic view
 //
