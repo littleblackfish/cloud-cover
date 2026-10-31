@@ -6,7 +6,7 @@ import {
 } from './sky.js';
 import {
   layerField, layerArea, bakeType, bakeBlotches, prebake, TYPES, TYPE_ROWS,
-  BLOTCH_SCALE, BLOTCH_ANGLE, EARTH_R, DECODE_GLSL,
+  BLOTCH_SCALE, BLOTCH_ANGLE, EARTH_R, DECODE_GLSL, TOWER_STEPS,
 } from './layer.js';
 
 const DEG = Math.PI / 180;
@@ -165,11 +165,17 @@ const layerUniforms = {
   opacity: { value: 1 },
   shadeAmt: { value: 0 },
   wisp: { value: 0 },
+  // clouds with height (layer.js towerField)
+  towerOn: { value: 0 },
+  topM: { value: 1000 },
+  anvil: { value: 0 },
+  profile: { value: 2 },
   cloudTex: { value: cloudTex },
   blotchTex: { value: blotchTex },
 };
 const LAYER_GLSL = `
-  uniform int shapeKind, typeOn;
+  uniform int shapeKind, typeOn, towerOn;
+  uniform float topM, anvil, profile;
   uniform float shapeAz, sliceCentre, layerT, layerHeight, layerFade;
   uniform float tileM, featureM, amount, blotch, soft, texAngle, opacity, shadeAmt, wisp;
   uniform vec3 capDir;
@@ -224,6 +230,43 @@ const LAYER_GLSL = `
     return texture2D(cloudTex, patternFrame(g) / tileM).g;
   }
   float layerAlpha(float shade) { return opacity * (1.0 - wisp * (1.0 - shade)); }
+
+  // Clouds with height, as layer.js towerField: the best of
+  // cloudiness - profile(height) along the line of sight s, traced from the
+  // base up to the tops. Returns that, and where (0 base .. 1 top) it was.
+  // (sampled at a level of detail set by the pixel's footprint there, fp
+  // metres, so the loop can stop early: see towerMarch)
+  float cloudinessAt(vec2 p, float fp) {
+    float d = length(p);
+    vec3 sp = normalize(vec3(p, layerHeight - d * d / 12742000.0));
+    vec2 q = patternFrame(p);
+    float t = textureLod(cloudTex, q / tileM, max(0.0, log2(fp * 512.0 / tileM))).r;
+    const float c = ${Math.cos(BLOTCH_ANGLE * DEG).toFixed(6)}, s = ${Math.sin(BLOTCH_ANGLE * DEG).toFixed(6)};
+    float bm = tileM * ${BLOTCH_SCALE.toFixed(3)};
+    float b = textureLod(blotchTex, vec2(c * q.x - s * q.y, s * q.x + c * q.y) / bm, max(0.0, log2(fp * 256.0 / bm))).r;
+    return region(sp) + blotch * ${DECODE_GLSL('b')} + amount * ${DECODE_GLSL('t')};
+  }
+  vec2 towerMarch(vec3 s) {
+    float hl = max(length(s.xy), 1e-6);
+    float tn = max(s.z, 1e-6) / hl;
+    vec2 u = s.xy / hl;
+    float n = clamp(ceil(topM / tn / (0.5 * featureM)) + 1.0, 2.0, ${TOWER_STEPS.toFixed(1)});
+    float pa = length(fwidth(s)); // the pixel's angular size
+    float best = -1e9, at = 0.0;
+    // each pixel shifts its samples by a fixed fraction of a step, so the
+    // steps between samples show as fine grain instead of bands
+    float jit = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715)))) - 0.5;
+    for (int k = 0; k < ${TOWER_STEPS}; k++) {
+      if (float(k) >= n) break;
+      float zz = clamp((float(k) + jit) / (n - 1.0), 0.0, 1.0);
+      float h = layerHeight + zz * topM;
+      float d = 2.0 * h / (tn + sqrt(tn * tn + 2.0 * h / 6371000.0));
+      float a = clamp((zz - 0.7) / 0.25, 0.0, 1.0);
+      float v = cloudinessAt(u * d, d * pa) - amount * pow(zz, profile) * (1.0 - anvil * a * a * (3.0 - 2.0 * a));
+      if (v > best) { best = v; at = zz; }
+    }
+    return vec2(best, at);
+  }
 `;
 
 // The dome is shaded from the cloudiness field itself (half-float texture,
@@ -246,6 +289,7 @@ const domeUniforms = {
   // drawn to the screen or into the stereographic view's cube map
   skyColor: { value: new THREE.Color().setRGB(120 / 255, 170 / 255, 225 / 255, THREE.SRGBColorSpace) },
   cloudColor: { value: new THREE.Color().setRGB(244 / 255, 246 / 255, 249 / 255, THREE.SRGBColorSpace) },
+  topColor: { value: new THREE.Color().setRGB(250 / 255, 251 / 255, 253 / 255, THREE.SRGBColorSpace) },
   skyAlpha: { value: 0.2 },
   cloudAlpha: { value: 0.93 },
 };
@@ -270,7 +314,7 @@ const dome = new THREE.Mesh(
     fragmentShader: `
       uniform sampler2D field;
       uniform float threshold, skyAlpha, cloudAlpha;
-      uniform vec3 skyColor, cloudColor;
+      uniform vec3 skyColor, cloudColor, topColor;
       uniform int layerOn;
       uniform float projection;
       varying vec2 vUv;
@@ -280,7 +324,18 @@ const dome = new THREE.Mesh(
       void main() {
         #include <logdepthbuf_fragment>
         float a, shade = 0.0;
-        if (layerOn == 1) {
+        vec3 cc = cloudColor;
+        if (layerOn == 1 && towerOn == 1) {
+          // clouds with height: traced through their height, drawn on the
+          // dome from inside and out. Bases are dark, sunlit sides and tops
+          // bright.
+          vec3 n = normalize(vDir);
+          vec3 s = vec3(n.x, -n.z, n.y); // east, north, up
+          vec2 m = towerMarch(s);
+          float w = fwidth(m.x) + soft;
+          a = s.z < 0.0 ? 0.0 : opacity * smoothstep(layerT - w, layerT + w, m.x) * layerFade;
+          cc = mix(cloudColor, topColor, smoothstep(0.0, 0.45, m.y));
+        } else if (layerOn == 1) {
           // Follow this pixel's line of sight out to the (curved) cloud layer.
           vec3 n = normalize(vDir);
           vec3 s = vec3(n.x, -n.z, n.y); // east, north, up
@@ -298,7 +353,7 @@ const dome = new THREE.Mesh(
           float w = max(fwidth(f), 1e-5);
           a = smoothstep(threshold - w, threshold + w, f);
         }
-        gl_FragColor = vec4(mix(skyColor, cloudColor * (1.0 - shade), a), mix(skyAlpha, cloudAlpha, a));
+        gl_FragColor = vec4(mix(skyColor, cc * (1.0 - shade), a), mix(skyAlpha, cloudAlpha, a));
         #include <colorspace_fragment>
       }`,
   }),
@@ -610,6 +665,10 @@ function updatePattern() {
     U.opacity.value = t.opacity;
     U.shadeAmt.value = t.shade;
     U.wisp.value = t.wisp ?? 0;
+    U.towerOn.value = t.topM ? 1 : 0;
+    U.topM.value = t.topM ?? 1000;
+    U.anvil.value = t.anvil ?? 0;
+    U.profile.value = t.profile ?? 2;
     const key = `${p.type}:${p.seed}`;
     if (cloudTexKey !== key) {
       cloudTex.image.data.set(bakeType(p.type, p.seed).data);
@@ -625,6 +684,7 @@ function updatePattern() {
     U.opacity.value = 1;
     U.shadeAmt.value = 0;
     U.wisp.value = 0;
+    U.towerOn.value = 0;
   }
   const tint = layerTint();
   domeUniforms.cloudColor.value.setRGB(tint[0] / 255, tint[1] / 255, tint[2] / 255, THREE.SRGBColorSpace);
@@ -650,7 +710,9 @@ function updateCloudMeshes() {
     layerSurface.userData.radius = reach;
   }
   layerSurface.position.y = GROUND_Y + activeLayer().base * K;
-  layerSurface.visible = true;
+  // Clouds with height are drawn on the dome (traced through their height);
+  // the flat layer then shows only their bases, from outside.
+  layerSurface.visible = !(layerUniforms.towerOn.value === 1 && view === 'inside');
 }
 
 // ================================================================ cameras
@@ -725,6 +787,7 @@ function flyTo(pos, target, fov, ms, done) {
 function setView(v, { yaw, pitch = 25 * DEG, fov = 80, reset = false, instant = false } = {}) {
   const from = view;
   view = v;
+  dirty = true; // what is drawn can depend on the view (clouds with height)
   $$('.view-switch [data-view]').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
   orbit.enabled = false;
   const ms = instant ? 0 : 1200;
@@ -1106,7 +1169,8 @@ function recompute() {
     layerField({ ...L, octas: shownLayerOctas(), height: Math.max(1, L.base - EYE_M) }, field);
     layerThreshold = solveThreshold(field, shownLayerOctas() / 8);
     coveredFrac = coverFromField(field, layerThreshold, cover);
-    patchArea = layerArea(cover, Math.max(1, L.base - EYE_M));
+    // (for clouds with height the sky covered is no longer just their bases)
+    patchArea = TYPES[L.type]?.topM ? 0 : layerArea(cover, Math.max(1, L.base - EYE_M));
     paintDome(false);
     updateCloudMeshes();
   } else {
@@ -1380,12 +1444,7 @@ for (const [etage, codes] of TYPE_ROWS) {
   chips.className = 'type-chips';
   for (const code of codes) {
     const t = TYPES[code];
-    const b = typeButton(code, code, t.name);
-    if (t.flat === false) {
-      b.disabled = true;
-      b.title = `${t.name}: needs height to draw, coming next`;
-    }
-    chips.append(b);
+    chips.append(typeButton(code, code, t.name));
   }
   row.append(chips);
   typeBox.append(row);

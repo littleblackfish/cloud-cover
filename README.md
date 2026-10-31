@@ -19,10 +19,13 @@ and is hosted on GitHub Pages without a build step.
   low, mid or high étage, sized to cover exactly the chosen octas of the
   dome. Azimuth and elevation (shared with the Celestial dome tab) place it.
   The patch can be drawn as one of the cloud types reported in Canadian
-  METARs: CI, CC, CS, AC, AS, NS, SC, ST, SF and CF so far (ACC, CU, TCU and
-  CB need height and come next). Each type's pattern lies on the layer, sized
+  METARs: CI, CC, CS, AC, ACC, AS, NS, SC, ST, SF, CU, CF, TCU and CB. Each
+  type's pattern lies on the layer, sized
   so its elements look the right size from the ground (CC grains under 1°,
-  AC 1–5°, SC over 5°), so it crowds together toward the horizon. Picking a
+  AC 1–5°, SC over 5°), so it crowds together toward the horizon. CU, TCU,
+  CB and ACC also have height: lines of sight are traced up through the
+  clouds, so toward the horizon you see their sides (white, over dark flat
+  bases) and the gaps between them close up. Picking a
   type moves the layer to its usual base, and the base slider covers the
   type's range; the étage follows from the base. Bases, base ranges and
   descriptions follow MANOBS (8th edition) table 7-1; the readout gives the

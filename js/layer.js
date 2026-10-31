@@ -16,7 +16,7 @@
 // The GPU copy of all this lives in main.js (LAYER_GLSL) and must match; the
 // patterns themselves are shared, baked once below.
 
-import { grid, W, H, shapeField } from './sky.js';
+import { grid, W, H, shapeField, patchCentre } from './sky.js';
 
 export const EARTH_R = 6371000;
 
@@ -171,7 +171,11 @@ const mixRGB = (a, b, t) => a.map((v, i) => Math.round(lerp(v, b[i], t)));
 //            parts are
 //   wisp     how much its thin parts let the sky through (fibrous veils)
 //   angle    the pattern's direction on the layer (deg): streaks, rolls
-//   flat     false: needs height to draw properly (towering types), not yet
+//   topM     clouds with height: how far the tallest elements rise above the
+//            base (m). Lines of sight are traced up through that height, so
+//            near the horizon you see their sides and the gaps close up.
+//   profile  the power in the profile: 2 domes, higher steeper-sided towers
+//   anvil    how far the top spreads out (cumulonimbus)
 export const TYPES = {
   CI: {
     name: 'Cirrus', etage: 'high', baseFt: 29000, baseRangeFt: [20000, 39000],
@@ -229,9 +233,21 @@ export const TYPES = {
     },
   },
   ACC: {
-    name: 'Altocumulus castellanus', etage: 'mid', baseFt: 16000, baseRangeFt: [6500, 20000], flat: false,
-    help: 'Altocumulus castellanus (ACC): altocumulus with cumuliform turrets, some taller than wide, on a common base and arranged in lines. Base 6,500–20,000 ft. Needs height to draw: coming next.',
+    name: 'Altocumulus castellanus', etage: 'mid', baseFt: 16000, baseRangeFt: [6500, 20000],
+    tileM: 9000, featureM: 220, amount: 0.9, blotch: 0.5, soft: 0.015,
+    opacity: 0.95, grey: [196, 201, 210], shade: 0.2, angle: 20, res: 512,
+    // turrets up to 500 m above the base, some taller than wide
+    topM: 500, profile: 3,
+    vary: (ft) => ({ grey: mixRGB([190, 195, 204], [214, 218, 226], (ft - 7000) / 9000) }),
+    help: 'Altocumulus castellanus (ACC): altocumulus with cumuliform turrets, some taller than wide, on a common base and arranged in lines. Base 6,500–20,000 ft.',
+    gen(u, v, s) {
+      // altocumulus elements, in lines, with knobbly turrets
+      const [a, b] = warp(u, v, 10, 0.35, s);
+      const e = cells(a, b, 40, 20, s, 0.8, 0.5);
+      return [e + 0.25 * fbm(u, v, 96, 96, 2, s + 3), clamp01(e)];
+    },
   },
+
   AS: {
     name: 'Altostratus', etage: 'mid', baseFt: 8000, baseRangeFt: [6500, 20000],
     tileM: 40000, featureM: 6000, amount: 0.1, blotch: 0.2, soft: 0.08,
@@ -290,9 +306,20 @@ export const TYPES = {
     },
   },
   CU: {
-    name: 'Cumulus', etage: 'low', baseFt: 4000, baseRangeFt: [1500, 10000], flat: false,
-    help: 'Cumulus (CU): detached, generally dense clouds with sharp outlines, rising in mounds, domes or towers like a cauliflower; dazzling white in the sun, with dark, almost flat bases. Base usually 1,500–6,500 ft, up to 10,000 ft or higher in very dry summer air. Needs height to draw: coming next.',
+    name: 'Cumulus', etage: 'low', baseFt: 4000, baseRangeFt: [1500, 10000],
+    tileM: 8000, featureM: 500, amount: 1.1, blotch: 0.4, soft: 0.01,
+    opacity: 1, grey: [168, 173, 182], shade: 0.15, angle: 0, res: 512,
+    // heaps about as tall as they are wide
+    topM: 1200,
+    help: 'Cumulus (CU): detached, generally dense clouds with sharp outlines, rising in mounds, domes or towers like a cauliflower; dazzling white in the sun, with dark, almost flat bases. Base usually 1,500–6,500 ft, up to 10,000 ft or higher in very dry summer air.',
+    gen(u, v, s) {
+      // detached heaps about 1 km across, lumpy (cauliflower) all over
+      const [a, b] = warp(u, v, 8, 0.25, s);
+      const e = cells(a, b, 8, 8, s, 0.6, 0.45);
+      return [e + 0.22 * fbm(u, v, 48, 48, 3, s + 3), clamp01(e)];
+    },
   },
+
   CF: {
     name: 'Cumulus fractus', etage: 'low', baseFt: 2500, baseRangeFt: [1500, 10000],
     tileM: 4000, featureM: 300, amount: 1.2, blotch: 0.3, soft: 0.02,
@@ -305,13 +332,33 @@ export const TYPES = {
     },
   },
   TCU: {
-    name: 'Towering cumulus', etage: 'low', baseFt: 4000, baseRangeFt: [1500, 10000], flat: false,
-    help: 'Towering cumulus (TCU): strongly sprouting cumulus with sharp outlines and often great vertical extent, its top like a cauliflower; sides white in the sun, base dark, flat and almost horizontal overhead. Base usually 1,500–6,500 ft, up to 10,000 ft or higher. Needs height to draw: coming next.',
+    name: 'Towering cumulus', etage: 'low', baseFt: 4000, baseRangeFt: [1500, 10000],
+    tileM: 12000, featureM: 1200, amount: 1.2, blotch: 0.4, soft: 0.01,
+    opacity: 1, grey: [150, 156, 166], shade: 0.15, angle: 0, res: 512,
+    // towers two to three times taller than wide, steep sided
+    topM: 5500, profile: 5,
+    help: 'Towering cumulus (TCU): strongly sprouting cumulus with sharp outlines and often great vertical extent, its top like a cauliflower; sides white in the sun, base dark, flat and almost horizontal overhead. Base usually 1,500–6,500 ft, up to 10,000 ft or higher.',
+    gen(u, v, s) {
+      const [a, b] = warp(u, v, 6, 0.2, s);
+      const e = cells(a, b, 5, 5, s, 0.5, 0.42);
+      return [e + 0.2 * fbm(u, v, 40, 40, 3, s + 3), clamp01(e)];
+    },
   },
+
   CB: {
-    name: 'Cumulonimbus', etage: 'low', baseFt: 3500, baseRangeFt: [1500, 10000], flat: false,
-    help: 'Cumulonimbus (CB): a heavy, dense cloud of great vertical extent, like a mountain or huge tower, its top often flattened and spread into an anvil; under its often very dark base, ragged low clouds and precipitation. Base usually 1,500–6,500 ft, up to 10,000 ft or higher. Needs height to draw: coming next.',
+    name: 'Cumulonimbus', etage: 'low', baseFt: 3500, baseRangeFt: [1500, 10000],
+    tileM: 40000, featureM: 4000, amount: 1.4, blotch: 0.3, soft: 0.01,
+    opacity: 1, grey: [108, 114, 124], shade: 0.15, angle: 0, res: 512,
+    // a mountain of cloud up to 10 km, spreading into an anvil near the top
+    topM: 10000, profile: 5, anvil: 0.85,
+    help: 'Cumulonimbus (CB): a heavy, dense cloud of great vertical extent, like a mountain or huge tower, its top often flattened and spread into an anvil; under its often very dark base, ragged low clouds and precipitation. Base usually 1,500–6,500 ft, up to 10,000 ft or higher.',
+    gen(u, v, s) {
+      const [a, b] = warp(u, v, 4, 0.2, s);
+      const e = cells(a, b, 2, 2, s, 0.7, 0.4);
+      return [e + 0.15 * fbm(u, v, 24, 24, 3, s + 3), clamp01(e)];
+    },
   },
+
 };
 export const TYPE_ROWS = [
   ['high', ['CI', 'CC', 'CS']],
@@ -404,6 +451,7 @@ export function layerField(params, out) {
   shapeField(params, out);
   const t = TYPES[params.type];
   if (!t || t.flat === false) return out;
+  if (t.topM) return towerField(params, t, out);
   const tile = bakeType(params.type, params.seed);
   const blot = bakeBlotches(params.seed);
   const ca = Math.cos(t.angle * Math.PI / 180), sa = Math.sin(t.angle * Math.PI / 180);
@@ -421,6 +469,79 @@ export function layerField(params, out) {
       out[k] += t.amount * sampleCover(tile, qx / t.tileM, qy / t.tileM) +
         t.blotch * sampleCover(blot, bx / blotchM, by / blotchM);
     }
+  }
+  return out;
+}
+
+// Clouds with height. A cloud element rises above the base where its
+// cloudiness c (as for a flat layer) beats the threshold T: its top is at
+// height topM * sqrt((c - T) / amount), a dome over each element. A line of
+// sight is in cloud if, at some height z on its way up through the clouds,
+// c - profile(z) > T, where profile(z) = amount (z / topM)^2 inverts that dome
+// (a higher power than 2 gives steeper sides and a rounder top: towers)
+// (an anvil eases it near the top, so the top spreads). So a direction's
+// cloudiness is the best of c - profile(z) along its line of sight: still one
+// number per direction, cut at one threshold, so the octas stay exact. The
+// GPU copy is towerMarch in main.js.
+export const TOWER_STEPS = 32;
+// Samples needed along a line of sight at elevation e: about one per half
+// feature it crosses on its way up through the clouds (steep lines cross
+// little), at least 2, at most TOWER_STEPS. main.js towerMarch matches it.
+export const towerSteps = (e, t) => Math.max(2, Math.min(TOWER_STEPS,
+  Math.ceil(t.topM / Math.max(1e-6, Math.tan(e)) / (0.5 * t.featureM)) + 1));
+// acos to about 1e-4 rad (Abramowitz and Stegun 4.4.46, refined)
+function fastAcos(x) {
+  const ax = Math.min(1, Math.abs(x));
+  const r = Math.sqrt(1 - ax) * (1.5707288 + ax * (-0.2121144 + ax * (0.0742610 - 0.0187293 * ax)));
+  return x < 0 ? Math.PI - r : r;
+}
+export const towerProfile = (zz, t) => {
+  const s = Math.min(1, Math.max(0, (zz - 0.7) / 0.25));
+  return t.amount * zz ** (t.profile ?? 2) * (1 - (t.anvil ?? 0) * s * s * (3 - 2 * s));
+};
+function towerField(params, t, out) {
+  const tile = bakeType(params.type, params.seed);
+  const blot = bakeBlotches(params.seed);
+  const ca = Math.cos(t.angle * Math.PI / 180), sa = Math.sin(t.angle * Math.PI / 180);
+  const cb = Math.cos(BLOTCH_ANGLE * Math.PI / 180), sb = Math.sin(BLOTCH_ANGLE * Math.PI / 180);
+  const blotchM = t.tileM * BLOTCH_SCALE;
+  // the patch centre, for the patch field at each point along the way
+  const [a0, e0] = patchCentre(params.azimuth, params.elevation);
+  const px = Math.sin(a0) * Math.cos(e0), py = Math.cos(a0) * Math.cos(e0), pz = Math.sin(e0);
+  const sinA = new Float32Array(W), cosA = new Float32Array(W);
+  for (let i = 0; i < W; i++) { sinA[i] = Math.sin(grid.az[i]); cosA[i] = Math.cos(grid.az[i]); }
+  const h0 = params.height;
+  // Traced on every other row and column (1 degree apart; the clouds are
+  // drawn per pixel on the GPU), and filled in between.
+  for (let j = 0; j < H; j += 2) {
+    const e = grid.el[j * W];
+    for (let i = 0; i < W; i += 2) out[j * W + i] = -Infinity;
+    const n = towerSteps(e, t);
+    for (let k = 0; k < n; k++) {
+      const zz = k / (n - 1);
+      const d = distanceToHeight(e, h0 + zz * t.topM);
+      const up = h0 - (d * d) / (2 * EARTH_R); // the base under that point
+      const len = Math.sqrt(d * d + up * up);
+      const pen = towerProfile(zz, t);
+      for (let i = 0; i < W; i += 2) {
+        const gx = d * sinA[i], gy = d * cosA[i];
+        const r = -fastAcos((gx * px + gy * py + up * pz) / len);
+        const qx = ca * gx - sa * gy, qy = sa * gx + ca * gy;
+        const bx = cb * qx - sb * qy, by = sb * qx + cb * qy;
+        const v = r + t.amount * sampleCover(tile, qx / t.tileM, qy / t.tileM) +
+          t.blotch * sampleCover(blot, bx / blotchM, by / blotchM) - pen;
+        const kk = j * W + i;
+        if (v > out[kk]) out[kk] = v;
+      }
+    }
+  }
+  for (let j = 0; j < H; j += 2) {
+    const row = j * W;
+    for (let i = 1; i < W; i += 2) out[row + i] = 0.5 * (out[row + i - 1] + out[row + ((i + 1) % W)]);
+  }
+  for (let j = 1; j < H; j += 2) {
+    const row = j * W, below = row - W, above = j + 1 < H ? row + W : below;
+    for (let i = 0; i < W; i++) out[row + i] = 0.5 * (out[below + i] + out[above + i]);
   }
   return out;
 }
