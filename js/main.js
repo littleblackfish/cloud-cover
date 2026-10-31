@@ -482,13 +482,12 @@ scene.add(groundLayer);
 // The rest of the planet: the ground carries on past the horizon, curving
 // away below it, drawn faintly out to PLANET_M.
 //
-// An outer dome of radius FAR_M, standing on the curved ground. Clouds much
-// beyond it sit within about a degree of the horizon, too low to judge, so it
-// marks the practical limit of the sky an observer sees. 66 km is a working
-// figure rather than a standard one: a 4,000 ft cloud base 66 km away is
-// only about 0.8 degrees above the horizon.
+// FAR_M is a cutoff, not drawn: cloud-layer clouds farther than this from the
+// observer are drawn only as a trace. They sit within about a degree of the
+// horizon, too low to judge. 66 km is a working figure rather than a
+// standard one: a 4,000 ft cloud base 66 km away is only about 0.8 degrees
+// above the horizon.
 const FAR_M = 66000;
-const FAR = FAR_M * K;
 const PLANET_M = 600000;
 function curvedRing(r0, r1, segments, rings) {
   const g = new THREE.RingGeometry(r0, r1, segments, rings);
@@ -505,20 +504,6 @@ const planet = new THREE.Mesh(
 );
 planet.position.y = GROUND_Y;
 scene.add(planet);
-const farDome = (() => {
-  // reach down past the eye's horizontal plane until the rim meets the
-  // curved ground (EYE_M plus the Earth's drop at FAR_M below the eye)
-  const dip = Math.atan2(EYE_M + (FAR_M * FAR_M) / (2 * EARTH_R), FAR_M);
-  const g = new THREE.SphereGeometry(FAR, 128, 48, 0, 2 * Math.PI, 0, Math.PI / 2 + dip);
-  const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
-    color: 0xaec6e0, transparent: true, opacity: 0.07, depthWrite: false, side: THREE.DoubleSide,
-  }));
-  const rim = circleLine(-dip, FAR, 0xaec6e0, 0.6);
-  const grp = new THREE.Group();
-  grp.add(m, rim);
-  scene.add(grp);
-  return grp;
-})();
 
 // The observer is far too small to see at this scale, so a marker of fixed
 // on-screen size shows where they stand.
@@ -579,7 +564,7 @@ const SURFACE_FRAG = `
   #include <logdepthbuf_pars_fragment>
   uniform vec3 color;
   uniform float metresPerUnit; // also the dome's radius in metres
-  uniform float farM; // the outer dome's radius in metres
+  uniform float farM; // cloud cutoff distance in metres
   varying vec2 vGround;
   ${LAYER_GLSL}
   void main() {
@@ -590,8 +575,8 @@ const SURFACE_FRAG = `
     float r = region(s), rw = fwidth(r);
     float a = s.z < 0.0 ? 0.0 : layerCloud(r, rw, vGround, dFdx(vGround), dFdy(vGround));
     // Only the cloud patch is drawn. Full brightness inside the dome,
-    // dimming with distance beyond it; past the outer dome (farM) only a
-    // trace of it shows.
+    // dimming with distance beyond it; past the cutoff (farM) only a trace
+    // of it shows.
     if (a < 0.01) discard;
     float dist = length(vec3(vGround, layerHeight));
     float far = smoothstep(1.0, 4.0, dist / metresPerUnit);
@@ -711,7 +696,7 @@ function setOrbitLimits() {
     orbit.maxDistance = 150; // far enough to see the whole layer, out to the line of sight
     orbit.maxPolarAngle = Math.PI / 2 - 0.01; // stay above the ground
   } else {
-    orbit.maxDistance = 40; // room to zoom out past the outer dome
+    orbit.maxDistance = 40; // room to zoom out over the planet
     orbit.maxPolarAngle = Math.PI / 2 + 0.35;
   }
 }
