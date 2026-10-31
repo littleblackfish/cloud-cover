@@ -633,8 +633,9 @@ layerSurface.visible = false;
 layerSurface.userData.radius = 0;
 scene.add(layerSurface);
 
-// Solid clouds (cumulus.js): spheres, flattened a little, cut flat at the
-// base, lit by the sun from the south-west. Near clouds are drawn with finer
+// Solid clouds (cumulus.js): spheres, flattened a little, their surfaces
+// lumped a little with Perlin noise, cut flat at the base, lit by the sun
+// from the south-west. Near clouds are drawn with finer
 // spheres than far ones. Looking up into a cut sphere shows its inside: that
 // is the flat, dark base.
 const SUN = toScene(Math.sin(220 * DEG) * Math.cos(40 * DEG), Math.cos(220 * DEG) * Math.cos(40 * DEG), Math.sin(40 * DEG)).normalize();
@@ -647,6 +648,7 @@ const solidUniforms = {
   metresPerUnit,
   fade: layerUniforms.layerFade,
   bumpM: { value: 130 },
+  lumpM: { value: 200 },
 };
 const solidMaterial = new THREE.ShaderMaterial({
   uniforms: solidUniforms,
@@ -657,10 +659,31 @@ const solidMaterial = new THREE.ShaderMaterial({
     #include <logdepthbuf_pars_vertex>
     attribute float aBase;
     attribute float aTop;
+    uniform float metresPerUnit, lumpM;
     varying vec3 vN, vW;
     varying float vBase, vTop;
+    // Perlin (gradient) noise, about -1..1
+    vec3 grad3(vec3 i) {
+      return fract(sin(vec3(dot(i, vec3(127.1, 311.7, 74.7)), dot(i, vec3(269.5, 183.3, 246.1)),
+        dot(i, vec3(113.5, 271.9, 124.6)))) * 43758.5453) * 2.0 - 1.0;
+    }
+    float perlin(vec3 p) {
+      vec3 i = floor(p), f = fract(p);
+      vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+      float n000 = dot(grad3(i), f), n100 = dot(grad3(i + vec3(1, 0, 0)), f - vec3(1, 0, 0));
+      float n010 = dot(grad3(i + vec3(0, 1, 0)), f - vec3(0, 1, 0)), n110 = dot(grad3(i + vec3(1, 1, 0)), f - vec3(1, 1, 0));
+      float n001 = dot(grad3(i + vec3(0, 0, 1)), f - vec3(0, 0, 1)), n101 = dot(grad3(i + vec3(1, 0, 1)), f - vec3(1, 0, 1));
+      float n011 = dot(grad3(i + vec3(0, 1, 1)), f - vec3(0, 1, 1)), n111 = dot(grad3(i + vec3(1, 1, 1)), f - vec3(1, 1, 1));
+      return 1.4 * mix(mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
+                       mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y), u.z);
+    }
     void main() {
-      vec4 w = modelMatrix * instanceMatrix * vec4(position, 1.0);
+      // Small lumps on the outline: each sphere's surface pushed in and out
+      // by up to about a tenth of its radius, with noise fixed in space so
+      // neighbouring spheres agree.
+      vec4 w0 = modelMatrix * instanceMatrix * vec4(position, 1.0);
+      float lump = perlin(w0.xyz * metresPerUnit / lumpM);
+      vec4 w = modelMatrix * instanceMatrix * vec4(position * (1.0 + 0.1 * lump), 1.0);
       vec3 sc = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
       vN = normalize(normal / sc);
       vW = w.xyz;
@@ -768,6 +791,7 @@ function updateSolidMeshes(show) {
   set(solidUniforms.shadeCol, look.shade);
   set(solidUniforms.baseCol, look.base);
   solidUniforms.bumpM.value = SOLID[activeLayer().type].R0 * 0.09;
+  solidUniforms.lumpM.value = SOLID[activeLayer().type].R0 * 0.3;
 }
 // sunlit tops, shaded sides and bases (sRGB)
 const SOLID_LOOK = {
