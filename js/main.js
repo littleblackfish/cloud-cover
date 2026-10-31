@@ -521,11 +521,7 @@ function tintFor(baseM) {
   if (ft < 19500) return blend(ETAGE_TINT.mid, ETAGE_TINT.high, (ft - 19000) / 1000);
   return ETAGE_TINT.high;
 }
-const ETAGES = {
-  low: { name: 'Low', base: [100, 6500], band: [0, 6500] },
-  mid: { name: 'Mid', base: [6600, 19000], band: [6500, 20000] },
-  high: { name: 'High', base: [20000, 40000], band: [20000, 45000] },
-};
+const ETAGES = { low: { name: 'Low' }, mid: { name: 'Mid' }, high: { name: 'High' } };
 
 // The layer in 3D: one curved surface out to the observer's line of sight.
 const metresPerUnit = { value: SCENE_M };
@@ -1101,6 +1097,7 @@ let layerOctasShown = layerParams.octas;
 
 function recompute() {
   if (mode === 'layer') {
+    followEtage();
     // The GPU draws the layer; the same field here gives the threshold for
     // the chosen octas, the numbers and the sky map. Lines of sight start at
     // the observer's eye, 1.7 m above the ground.
@@ -1250,20 +1247,13 @@ $$('#guides button').forEach((b) => b.addEventListener('click', () => setGuides(
 // Cloud base height is shown in feet or metres; everything is
 // stored in metres. Horizontal distances stay metric.
 let heightUnit = 'ft';
-// The base range (ft): the étage's, narrowed to the type's (MANOBS).
-function baseRangeFt(etage, type) {
-  let [lo, hi] = ETAGES[etage].base;
-  const r = TYPES[type]?.baseRangeFt;
-  if (r) { lo = Math.max(lo, r[0]); hi = Math.min(hi, r[1]); }
-  return [lo, hi];
-}
-// The étages a type's base range reaches into.
-const typeEtages = (type) => Object.keys(ETAGES).filter((e) => {
-  const [lo, hi] = baseRangeFt(e, type);
-  return hi > lo;
-});
+// The base range (ft): the type's, from MANOBS; any height for a plain patch.
+const PLAIN_RANGE_FT = [100, 39000];
+const baseRangeFt = (type) => TYPES[type]?.baseRangeFt ?? PLAIN_RANGE_FT;
+// The étage follows the base.
+const etageOf = (ft) => (ft <= 6500 ? 'low' : ft < 20000 ? 'mid' : 'high');
 const heightRange = () => {
-  const [lo, hi] = baseRangeFt(layerParams.etage, layerParams.type);
+  const [lo, hi] = baseRangeFt(layerParams.type);
   return heightUnit === 'ft'
     ? [lo, hi, 100]
     : [Math.ceil((lo * FT) / 10) * 10, Math.floor((hi * FT) / 10) * 10, 10];
@@ -1320,7 +1310,8 @@ $$('#units button').forEach((b) => b.addEventListener('click', () => {
   layerCtl.base.sync();
 }));
 
-// Typical base for each étage (ft), and the clouds you would find there.
+// Typical base for each étage (ft; frames the outside view), and the clouds
+// you would find there.
 const ETAGE_BASE_FT = { low: 4000, mid: 12000, high: 28000 };
 const GENUS = {
   low: 'Low étage: cumulus (Cu), stratocumulus (Sc), stratus (St); cumulonimbus (Cb) and nimbostratus (Ns) bases are low too.',
@@ -1329,12 +1320,8 @@ const GENUS = {
 };
 
 function syncLayerControls() {
-  const { etage } = layerParams;
-  $$('#etage button').forEach((b) => b.classList.toggle('on', b.dataset.etage === etage));
-  $('#genus').textContent = GENUS[etage];
+  $('#genus').textContent = GENUS[layerParams.etage];
   const t = TYPES[layerParams.type];
-  const reach = typeEtages(layerParams.type);
-  $$('#etage button').forEach((b) => { b.disabled = !reach.includes(b.dataset.etage); });
   $$('#ltypes button').forEach((b) => b.classList.toggle('on', b.dataset.type === layerParams.type));
   $('#ltype-out').textContent = t ? `${layerParams.type} · ${t.name}` : 'plain patch';
   $('#type-help').textContent = t ? t.help
@@ -1343,28 +1330,26 @@ function syncLayerControls() {
   syncLayerChips();
   dirty = true;
 }
-// The layer glides to a new base; the octas stay. Changing étage also
-// reframes the outside view alongside.
-function glideBase(etage, ft, type = layerParams.type) {
-  const [lo, hi] = baseRangeFt(etage, type);
-  const changed = etage !== layerParams.etage;
-  layerParams.etage = etage;
+// The layer glides to a new base; the octas stay.
+function glideBase(ft, type = layerParams.type) {
+  const [lo, hi] = baseRangeFt(type);
   const to = { base: Math.min(hi, Math.max(lo, ft)) * FT };
   baseTween = { from: { base: layerParams.base }, to, start: performance.now(), duration: REDUCED_MOTION ? 1 : 1500 };
-  if (changed) {
-    const s0 = viewScaleWanted, s1 = layerViewScale();
-    animate('viewScale', 1500, (e) => { viewScaleWanted = s0 + (s1 - s0) * e; });
-  }
-  syncLayerControls();
 }
-$$('#etage button').forEach((b) => b.addEventListener('click', () => {
-  if (b.dataset.etage === layerParams.etage) return;
-  glideBase(b.dataset.etage, ETAGE_BASE_FT[b.dataset.etage]);
-}));
+// The étage follows the base. When it changes, the outside view reframes
+// for the new étage (not for every change of base), and the notes follow.
+function followEtage() {
+  const etage = etageOf(layerParams.base / FT);
+  if (etage === layerParams.etage) return;
+  layerParams.etage = etage;
+  const s0 = viewScaleWanted, s1 = layerViewScale();
+  animate('viewScale', 1500, (e) => { viewScaleWanted = s0 + (s1 - s0) * e; });
+  $('#genus').textContent = GENUS[etage];
+}
 
 // Cloud types, by étage. Picking one fades the old pattern out and the new
-// one in, and moves the layer to the type's usual base and étage (some, like
-// nimbostratus, can then be moved to another).
+// one in, and moves the layer to the type's usual base (MANOBS); the base
+// can then be set anywhere in the type's range.
 const typeBox = $('#ltypes');
 const typeButton = (code, label, title) => {
   const b = document.createElement('button');
@@ -1405,7 +1390,7 @@ for (const [etage, codes] of TYPE_ROWS) {
 function setType(code) {
   if (code === layerParams.type) return;
   const t = TYPES[code];
-  if (t) glideBase(t.etage, t.baseFt, code);
+  if (t) glideBase(t.baseFt, code);
   animate('typeFade', 250, (e) => { layerUniforms.layerFade.value = 1 - e; }, () => {
     layerParams.type = code;
     syncLayerControls();

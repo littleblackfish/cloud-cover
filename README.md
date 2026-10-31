@@ -23,13 +23,14 @@ and is hosted on GitHub Pages without a build step.
   CB need height and come next). Each type's pattern lies on the layer, sized
   so its elements look the right size from the ground (CC grains under 1°,
   AC 1–5°, SC over 5°), so it crowds together toward the horizon. Picking a
-  type moves the layer to its usual étage and base. Bases, base ranges and
+  type moves the layer to its usual base, and the base slider covers the
+  type's range; the étage follows from the base. Bases, base ranges and
   descriptions follow MANOBS (8th edition) table 7-1; the readout gives the
   amount term (FEW, SCT, BKN, OVC) from table 7-2.
   The scene is to scale and follows the Earth's curve: an observer with eyes
   1.7 m up, a dome whose radius is the distance to their horizon (4.65 km),
   the ground inside it, and the layer drawn out to the observer's line of
-  sight. Each étage has its own grey.
+  sight. Each type has its own grey; a plain patch takes its étage's.
 - **Quiz tab:** random plain slices and patches to estimate from inside the dome, scored using
   the octa rounding rules; the outside view and sky map open after answering.
 
