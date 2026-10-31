@@ -8,7 +8,7 @@ import {
   layerField, layerArea, bakeType, bakeBlotches, prebake, TYPES, TYPE_ROWS,
   BLOTCH_SCALE, BLOTCH_ANGLE, EARTH_R, DECODE_GLSL, TOWER_STEPS,
 } from './layer.js';
-import { solidField, solidSpheres, S_MAX, SOLID } from './cumulus.js';
+import { solidField, solidSpheres, REACH_MAX, SOLID } from './cumulus.js';
 
 const DEG = Math.PI / 180;
 const FT = 0.3048; // metres per foot
@@ -732,7 +732,7 @@ const solidMaterial = new THREE.ShaderMaterial({
         c = mix(baseCol, c, smoothstep(0.0, 0.3, h) * (0.55 + 0.45 * smoothstep(-0.8, 0.1, n.y)));
       }
       float dist = length(vW) * metresPerUnit;
-      c = mix(c, hazeCol, 0.55 * smoothstep(15000.0, 150000.0, dist));
+      c = mix(c, hazeCol, 0.7 * smoothstep(8000.0, 120000.0, dist));
       gl_FragColor = vec4(c, fade);
       #include <colorspace_fragment>
     }`,
@@ -1343,13 +1343,13 @@ function recompute() {
     // the observer's eye, 1.7 m above the ground.
     const params = { ...L, octas: shownLayerOctas(), height: Math.max(1, L.base - EYE_M) };
     if (TYPES[L.type]?.solid) {
-      // solid clouds: the field is minus the scale at which each direction
-      // is first covered; the threshold gives the clouds' scale. Where even
-      // the largest clouds cannot cover the amount asked, they cover what
-      // they can, and the numbers say so.
+      // solid clouds: the field is minus the reach at which each direction
+      // is first covered; the threshold gives the reach. Where even all the
+      // clouds cannot cover the amount asked, they cover what they can, and
+      // the numbers say so.
       solidState = solidField(params, field);
       let T = solveThreshold(field, shownLayerOctas() / 8);
-      if (!(T > -S_MAX)) T = -S_MAX;
+      if (!(T > -REACH_MAX)) T = -REACH_MAX;
       solidScale = Number.isFinite(T) ? Math.max(0, -T) : 0;
       threshold = Number.isFinite(T) ? T : 1;
       coveredFrac = coverFromField(field, threshold, cover);

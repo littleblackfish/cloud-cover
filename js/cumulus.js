@@ -3,16 +3,15 @@
 // meshes; here they are laid out, and the amount of sky they cover is worked
 // out exactly.
 //
-// The amount is set by one number, the scale s: every cloud grows from its
-// anchor (the middle of its base) to s times its own size. For each sky
-// direction there is a smallest scale at which a cloud first touches that
-// line of sight (a quadratic for each sphere: see touchScale). So the sky
-// is one number per direction, and the scale that covers exactly the chosen
+// Clouds come and go one by one: each has its own full size (sizes vary a
+// lot), and they join in order outward from the patch (azimuth,
+// elevation), with a ragged edge. The amount is set by one number, the
+// reach: clouds whose turn the reach has passed are full size, the next few
+// are growing from their anchor (the middle of their base), the rest are
+// not there. For each sky direction there is a smallest reach at which a
+// cloud covers it (a quadratic for each sphere: see touchScale). So the sky
+// is one number per direction, and the reach that covers exactly the chosen
 // octas is a threshold on it, as for the flat clouds.
-//
-// Each cloud's own size also depends on where it is: clouds near the patch
-// (azimuth, elevation) are full size, those farther out smaller, then none,
-// so the cloud gathers where it is placed, as the flat types do.
 //
 // Coordinates: metres from the observer's eye, east, north, up. Farther
 // clouds sit lower by d^2 / 2R (the Earth's curve).
@@ -104,43 +103,55 @@ const SHAPES = {
   },
 };
 
-// R0: the cloud's size (m); spacing between clouds (m); fill: about how much
-// of the area they gather in they cover; topR: height of the top in R0.
-// LOD: how many of a cloud's spheres to draw when it is middling far (a
-// degree or two across) and far (under a degree).
+// R0: the cloud's size (m); spacing between clouds (m); topR: height of the
+// top in R0. LOD: how many of a cloud's spheres to draw when it is middling
+// far (a degree or two across) and far (under a degree).
 export const SOLID = {
-  CU: { R0: 650, spacing: 2300, fill: 0.45, topR: 1.35, lod: [4, 1] },
-  TCU: { R0: 900, spacing: 5000, fill: 0.4, topR: 4.8, lod: [10, 5] },
-  CB: { R0: 3200, spacing: 30000, fill: 0.6, topR: 3.6, lod: [14, 9] },
+  CU: { R0: 600, spacing: 2800, topR: 1.35, lod: [4, 1] },
+  TCU: { R0: 900, spacing: 6000, topR: 4.8, lod: [10, 5] },
+  CB: { R0: 3200, spacing: 30000, topR: 3.6, lod: [14, 9] },
 };
-export const S_MAX = 3; // the largest the clouds may grow
-export const UNREACHED = -100; // field value where no cloud reaches by S_MAX
+// Clouds join one after another as the amount grows: each takes BAND
+// (radians of "reach", see order) to grow from nothing to full size. Once
+// all have joined (REACH_ALL), all of them grow further, up to GROW_MAX
+// times their size, for the larger amounts.
+const BAND = 0.12;
+const REACH_ALL = Math.PI * 1.6 + BAND;
+const GROW_MAX = 2.2;
+const GROW_PER = 1; // size added per unit of reach past REACH_ALL
+export const REACH_MAX = REACH_ALL + (GROW_MAX - 1) / GROW_PER;
+// a cloud's scale (of its R0) at a reach, given its order and full size
+const scaleAt = (reach, ord, size) => (reach <= REACH_ALL
+  ? Math.min(1, Math.max(0, (reach - ord) / BAND)) * size
+  : size * (1 + (reach - REACH_ALL) * GROW_PER));
+export const UNREACHED = -100; // field value where no cloud ever reaches
 
 // The clouds over the observer: anchors on a jittered grid out to as far as
-// a cloud top can be seen, each with its shape. Fixed for a type, seed and
-// base height.
+// a cloud top can be seen, each with its size and shape. Fixed for a type,
+// seed and base height.
 const layoutCache = new Map();
 function layout(type, seed, height) {
   const key = `${type}:${seed}:${Math.round(height)}`;
   if (layoutCache.has(key)) return layoutCache.get(key);
   const sp = SOLID[type];
-  const top = height + sp.topR * sp.R0 * 1.3;
+  const top = height + sp.topR * sp.R0 * 1.7;
   const reach = Math.min(220000, Math.sqrt(2 * EARTH_R * top) + 3000);
   const n = Math.ceil(reach / sp.spacing);
   const clouds = [];
   const r = rng(seed * 7919 + type.length * 104729);
   for (let gy = -n; gy <= n; gy++) {
     for (let gx = -n; gx <= n; gx++) {
-      const e = (gx + 0.8 * (r() - 0.5)) * sp.spacing;
-      const no = (gy + 0.8 * (r() - 0.5)) * sp.spacing;
-      const size = 0.65 + 0.7 * r();
+      const e = (gx + 0.9 * (r() - 0.5)) * sp.spacing;
+      const no = (gy + 0.9 * (r() - 0.5)) * sp.spacing;
+      // sizes vary a lot: many small clouds, a few big ones
+      const size = 0.6 + 1.4 * r() ** 2.2;
       const shapeSeed = Math.floor(r() * 1e9);
       const jitter = r();
       const d = Math.hypot(e, no);
       if (d > reach) continue;
       const up = height - (d * d) / (2 * EARTH_R);
       // a far cloud is only a few degrees across, or less: draw it with
-      // its biggest spheres only
+      // its main spheres only
       const ang = (sp.R0 * size * 2) / Math.max(1, Math.hypot(d, up));
       const all = SHAPES[type](rng(shapeSeed));
       const keep = Math.min(all.length, ang > 3 * DEG ? all.length : ang > 0.8 * DEG ? sp.lod[0] : sp.lod[1]);
@@ -156,31 +167,18 @@ function layout(type, seed, height) {
   return out;
 }
 
-// Each cloud's own size factor: full near the patch, fading to nothing
-// beyond the area that, at the type's fill, covers the chosen octas.
-function weights(L, params) {
+// The order in which clouds join: by their angle from the patch centre,
+// stretched or shrunk at random so the group's edge is ragged. A cloud
+// starts to grow when the reach passes its order, and is full size BAND
+// later; the reach is what the octas set.
+function order(L, params) {
   const [a0, e0] = patchCentre(params.azimuth, params.elevation);
   const px = Math.sin(a0) * Math.cos(e0), py = Math.cos(a0) * Math.cos(e0), pz = Math.sin(e0);
-  // the angular radius of a cap round the patch holding that much sky
-  // (counting the whole sphere of directions, so a large area reaches round
-  // to the far horizon)
-  const area = Math.min(1, params.octas / 8 / L.sp.fill);
-  const theta = Math.max(4 * DEG, Math.acos(1 - 2 * area));
-  const angs = L.clouds.map((c) => {
+  return L.clouds.map((c) => {
     const len = Math.hypot(c.d, c.up);
-    return Math.acos(Math.max(-1, Math.min(1, (c.e * px + c.n * py + c.up * pz) / len)));
+    const ang = Math.acos(Math.max(-1, Math.min(1, (c.e * px + c.n * py + c.up * pz) / len)));
+    return ang * (0.6 + 0.8 * c.jitter);
   });
-  const w = angs.map((ang, i) => {
-    const q = ang / theta;
-    const v = 1.25 - q * q + 0.3 * (L.clouds[i].jitter - 0.5);
-    return v <= 0 ? 0 : Math.min(1, v) * L.clouds[i].size;
-  });
-  // the cloud nearest the patch always takes part (where clouds are far
-  // apart, like cumulonimbus, the area may hold none)
-  let best = 0;
-  for (let i = 1; i < angs.length; i++) if (angs[i] < angs[best]) best = i;
-  if (angs.length) w[best] = Math.max(w[best], 0.8 * L.clouds[best].size);
-  return w;
 }
 
 // Smallest scale sigma at which a sphere, centred A + sigma v with radius
@@ -205,29 +203,31 @@ function touchScale(Ax, Ay, Az, vx, vy, vz, rho, ux, uy, uz) {
   return s > 0 ? s : Infinity;
 }
 
-// Fills out[k] with minus the scale at which each sky direction is first
+// Fills out[k] with minus the reach at which each sky direction is first
 // covered (minus, so that the cloud is where out > threshold, as for the
-// flat types); directions no cloud reaches by S_MAX get UNREACHED. Returns
-// what the meshes need: the layout and the clouds' size factors.
+// flat types): a cloud at full size `size` covers a direction once it has
+// grown to scale sigma (touchScale), which it reaches at reach
+// order + BAND sigma / size. Directions no cloud ever covers get UNREACHED.
+// Returns what the meshes need.
 export function solidField(params, out) {
   const L = layout(params.type, params.seed, params.height);
-  const w = weights(L, params);
+  const ord = order(L, params);
   out.fill(Infinity);
   const { x: gx, y: gy, z: gz } = grid;
   const R0 = L.sp.R0;
   for (let ci = 0; ci < L.clouds.length; ci++) {
-    const wi = w[ci];
-    if (wi <= 0) continue;
     const c = L.clouds[ci];
+    const full = c.size, oc = ord[ci];
     for (const [sx, sy, sz, sr, sk] of c.spheres) {
       // in coordinates stretched vertically by 1/k
       const k = sk;
       const Ax = c.e, Ay = c.n, Az = c.up / k;
-      const vx = sx * R0 * wi, vy = sy * R0 * wi, vz = (sz * R0 * wi) / k, rho = sr * R0 * wi;
-      // the directions it can reach, growing up to S_MAX
-      const cx = Ax + S_MAX * vx, cy = Ay + S_MAX * vy, cz = (Az + S_MAX * vz) * k;
+      const vx = sx * R0, vy = sy * R0, vz = (sz * R0) / k, rho = sr * R0;
+      // the directions it can reach at its largest
+      const big = full * GROW_MAX;
+      const cx = Ax + big * vx, cy = Ay + big * vy, cz = (Az + big * vz) * k;
       const dist = Math.sqrt(cx * cx + cy * cy + cz * cz);
-      const rad = S_MAX * rho; // the largest semi-axis
+      const rad = big * rho; // the largest semi-axis
       if (rad >= dist) continue; // around the eye: not possible above the base
       const beta = Math.asin(rad / dist);
       const elc = Math.asin(cz / dist);
@@ -247,13 +247,16 @@ export function solidField(params, out) {
           const i = ((i0 + ii) % W + W) % W;
           if (i & 1) continue;
           const kk = j * W + i;
-          const s = touchScale(Ax, Ay, Az, vx, vy, vz, rho, gx[kk], gy[kk], gz[kk] / k) / 1;
-          if (s < out[kk]) out[kk] = s;
+          const sig = touchScale(Ax, Ay, Az, vx, vy, vz, rho, gx[kk], gy[kk], gz[kk] / k);
+          if (sig > big) continue;
+          // the reach at which the cloud has grown to sig (inverse of scaleAt)
+          const reach = sig <= full ? oc + (BAND * sig) / full : REACH_ALL + (sig / full - 1) / GROW_PER;
+          if (reach < out[kk]) out[kk] = reach;
         }
       }
     }
   }
-  for (let kk = 0; kk < out.length; kk++) out[kk] = out[kk] > S_MAX ? UNREACHED : -out[kk];
+  for (let kk = 0; kk < out.length; kk++) out[kk] = out[kk] === Infinity ? UNREACHED : -out[kk];
   for (let j = 0; j < H; j += 2) {
     const row = j * W;
     for (let i = 1; i < W; i += 2) out[row + i] = 0.5 * (out[row + i - 1] + out[row + ((i + 1) % W)]);
@@ -262,20 +265,20 @@ export function solidField(params, out) {
     const row = j * W, below = row - W, above = j + 1 < H ? row + W : below;
     for (let i = 0; i < W; i++) out[row + i] = 0.5 * (out[below + i] + out[above + i]);
   }
-  return { L, w };
+  return { L, ord };
 }
 
-// The spheres to draw at scale s: centre (east, north, up), radii
+// The spheres to draw at a given reach: centre (east, north, up), radii
 // (horizontal, vertical), base height and the cloud's top, all in metres;
 // detail: whether the cloud is drawn in full (near) or simplified (far).
-export function solidSpheres(state, s) {
-  const { L, w } = state;
+export function solidSpheres(state, reach) {
+  const { L, ord } = state;
   const R0 = L.sp.R0;
   const list = [];
   for (let ci = 0; ci < L.clouds.length; ci++) {
-    const sig = s * w[ci];
-    if (sig * R0 < 5) continue;
     const c = L.clouds[ci];
+    const sig = scaleAt(reach, ord[ci], c.size);
+    if (sig * R0 < 5) continue;
     for (const [sx, sy, sz, sr, sk] of c.spheres) {
       list.push({
         e: c.e + sig * sx * R0, n: c.n + sig * sy * R0, up: c.up + sig * sz * R0,
