@@ -224,6 +224,7 @@ export const TYPES = {
     name: 'Altocumulus', etage: 'mid', baseFt: 16000, baseRangeFt: [6500, 20000],
     tileM: 9000, featureM: 220, amount: 0.9, blotch: 0.5, soft: 0.015,
     opacity: 0.93, grey: [218, 222, 229], shade: 0.35, angle: 20, res: 512,
+    meshNear: { across: 200, along: 290, thick: 110, R0: 250 },
     // small elements with little shading near 16,000 ft, darker lower
     vary: (ft) => {
       const t = (ft - 7000) / 9000;
@@ -240,8 +241,9 @@ export const TYPES = {
     name: 'Altocumulus castellanus', etage: 'mid', baseFt: 16000, baseRangeFt: [6500, 20000],
     tileM: 9000, featureM: 220, amount: 0.9, blotch: 0.5, soft: 0.015,
     opacity: 0.95, grey: [196, 201, 210], shade: 0.2, angle: 20, res: 512,
-    // turrets up to 500 m above the base, some taller than wide
-    topM: 500, profile: 3,
+    // near the observer: altocumulus elements with turrets on the thicker
+    // ones, some taller than wide
+    meshNear: { across: 200, along: 400, thick: 110, R0: 250, turrets: true },
     vary: (ft) => ({ grey: mixRGB([190, 195, 204], [214, 218, 226], (ft - 7000) / 9000) }),
     help: 'Altocumulus with turrets, some taller than wide, on a common base, in lines. Base 6,500–20,000 ft.',
     gen(u, v, s) {
@@ -281,8 +283,9 @@ export const TYPES = {
     name: 'Stratocumulus', etage: 'low', baseFt: 3500, baseRangeFt: [500, 6500],
     tileM: 10000, featureM: 300, amount: 0.7, blotch: 0.35, soft: 0.04,
     opacity: 0.96, wisp: 0.08, grey: [214, 218, 224], shade: 0.5, angle: 20, res: 512,
-    // near the observer, drawn as solid rolls (main.js sheetSpheres)
-    meshNear: true,
+    // near the observer, drawn as solid rolls (main.js sheetSpheres):
+    // grid spacing across and along the rolls, and thickness (m)
+    meshNear: { across: 170, along: 420, thick: 140, R0: 400 },
     help: 'Grey or whitish patches or sheets of rounded masses or rolls, with dark parts; elements over three fingers wide. Base 500–6,500 ft.',
     gen(u, v, s) {
       // rolls in rows across the wind (about 300 m apart, a km or two long),

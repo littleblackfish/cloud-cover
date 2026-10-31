@@ -811,30 +811,33 @@ function updateSolidMeshes(show) {
     base.needsUpdate = top.needsUpdate = true;
   }
   solidLook();
-  const R0 = (SOLID[type] ?? SHEET).R0;
+  const R0 = (SOLID[type] ?? TYPES[type].meshNear).R0;
   solidUniforms.sheet.value = TYPES[type]?.meshNear ? 1 : 0;
   solidUniforms.bumpM.value = R0 * 0.09;
   solidUniforms.lumpM.value = R0 * 0.3;
 }
 
-// Stratocumulus near the observer: flattened ellipsoids on a grid lined up
-// with the rolls (across x along, metres), wherever the layer's pattern
-// beats the threshold (layer.js cloudinessSampler), bigger and thicker
-// where it beats it more, so they follow the same rolls and gaps as the
-// pattern drawn beyond them. Out to about 3 degrees above the horizon; the
-// flat pattern takes over from there (see the layer surface's nearM).
-const SHEET = { across: 170, along: 420, thick: 140, nearDeg: 3, maxM: 20000, R0: 400 };
+// Stratocumulus and altocumulus near the observer: flattened ellipsoids on
+// a grid lined up with the rolls (the type's meshNear: across x along and
+// thickness, metres), wherever the layer's pattern beats the threshold
+// (layer.js cloudinessSampler), bigger and thicker where it beats it more,
+// so they follow the same rolls and gaps as the pattern drawn beyond them.
+// Altocumulus castellanus adds turrets on its thicker elements. Out to about
+// 3 degrees above the horizon; the flat pattern takes over from there (see
+// the layer surface's nearM).
+const SHEET = { nearDeg: 3, maxM: 20000 };
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
 const sheetNearM = (L) => Math.min(SHEET.maxM, Math.max(3000, Math.max(1, L.base - EYE_M) / Math.tan(SHEET.nearDeg * DEG)));
 function sheetSpheres(L, T) {
   const t = TYPES[L.type];
+  const g = t.meshNear;
   const h = Math.max(1, L.base - EYE_M);
   const near = sheetNearM(L);
   const at = cloudinessSampler({ ...L, height: h });
   // the pattern's axes on the ground: across the rolls and along them
   const ang = t.angle * DEG;
   const ux = Math.cos(ang), uy = -Math.sin(ang), vx = Math.sin(ang), vy = Math.cos(ang);
-  const na = Math.ceil(near / SHEET.across), nb = Math.ceil(near / SHEET.along);
+  const na = Math.ceil(near / g.across), nb = Math.ceil(near / g.along);
   const full = 0.5 * t.amount; // how far past the threshold is full thickness
   const frac = (v) => v - Math.floor(v);
   const list = [];
@@ -842,7 +845,7 @@ function sheetSpheres(L, T) {
     for (let j = -nb; j <= nb; j++) {
       const h1 = frac(Math.sin(i * 12.9898 + j * 78.233) * 43758.5453);
       const h2 = frac(Math.sin(i * 39.3468 + j * 11.135) * 24634.6345);
-      const a = (i + 0.6 * (h1 - 0.5)) * SHEET.across, b = (j + 0.6 * (h2 - 0.5)) * SHEET.along;
+      const a = (i + 0.6 * (h1 - 0.5)) * g.across, b = (j + 0.6 * (h2 - 0.5)) * g.along;
       const x = a * ux + b * vx, y = a * uy + b * vy;
       const d = Math.hypot(x, y);
       if (d > near) continue;
@@ -850,13 +853,28 @@ function sheetSpheres(L, T) {
       if (c <= 0) continue;
       const th = Math.min(1, c / full);
       const up = h - (d * d) / (2 * EARTH_R);
-      const rv = SHEET.thick * (0.35 + 0.9 * th);
+      const rv = g.thick * (0.35 + 0.9 * th);
       const grow = 0.75 + 0.45 * th;
+      const top = up + 2 * g.thick + (g.turrets ? 4 * g.thick : 0);
       list.push({
         e: x, n: y, up: up + 0.45 * rv,
-        rh: 0.8 * SHEET.across * grow, rh2: 0.75 * SHEET.along * grow, rv,
-        base: up, top: up + 2 * SHEET.thick, detail: true, rot: -ang,
+        rh: 0.8 * g.across * grow, rh2: 0.75 * g.along * grow, rv,
+        base: up, top, detail: true, rot: -ang,
       });
+      // a turret on the thicker elements: narrower, and up to twice as tall
+      // as it is wide
+      if (g.turrets && th > 0.45) {
+        const tw = 0.3 * g.across * (0.7 + 0.6 * h1);
+        const tv = tw * (1 + 1.6 * (th - 0.45) / 0.55) * (0.6 + 0.8 * h2);
+        list.push({
+          e: x + 0.1 * g.across * (h2 - 0.5), n: y, up: up + 0.9 * rv + 0.8 * tv,
+          rh: tw, rh2: tw, rv: tv, base: up, top, detail: true, rot: 0,
+        });
+        list.push({
+          e: x, n: y, up: up + 0.9 * rv + 1.7 * tv,
+          rh: 0.75 * tw, rh2: 0.75 * tw, rv: 0.6 * tv, base: up, top, detail: true, rot: 0,
+        });
+      }
     }
   }
   return list;
@@ -881,6 +899,8 @@ const SOLID_LOOK = {
   TCU: { lit: [250, 251, 253], shade: [188, 195, 206], base: [132, 139, 151] },
   CB: { lit: [238, 241, 246], shade: [158, 165, 178], base: [84, 90, 101] },
   SC: { lit: [236, 239, 244], shade: [176, 182, 193], base: [140, 147, 158] },
+  AC: { lit: [246, 248, 251], shade: [198, 204, 214], base: [168, 175, 186] },
+  ACC: { lit: [246, 248, 251], shade: [192, 198, 209], base: [160, 167, 179] },
 };
 
 // Point the shared layer uniforms at the current layer.
