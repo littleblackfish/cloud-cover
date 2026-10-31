@@ -1114,10 +1114,12 @@ function flyTo(pos, target, fov, ms, done) {
 
 // opts.reset: go to the default pose instead of keeping the current heading.
 // opts.instant: no flight (used at start-up and behind a fade).
-function setView(v, { yaw, pitch = 25 * DEG, fov = 80, reset = false, instant = false } = {}) {
+function setView(v, { yaw, pitch = 25 * DEG, reset = false, instant = false } = {}) {
   const from = view;
   view = v;
   dirty = true; // what is drawn can depend on the view (clouds with height)
+  if (v !== 'inside' && motion.on) setMotion(false);
+  syncMotionButton();
   $$('.view-switch [data-view]').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
   orbit.enabled = false;
   const ms = instant ? 0 : 1200;
@@ -1144,12 +1146,12 @@ function setView(v, { yaw, pitch = 25 * DEG, fov = 80, reset = false, instant = 
   } else {
     look.yaw = heading;
     look.pitch = pitch;
-    look.fov = fov;
+    look.fov = OBSERVER_FOV; // fixed: wider views distort too much
     flyTo(new THREE.Vector3(0, 0, 0), dirFromAzEl(look.yaw, look.pitch), look.fov, ms, () => {
       const inside = view === 'inside';
       setObserverVisible(!inside);
     });
-    $('#view-hint').textContent = 'Drag to look around · scroll to change field of view';
+    $('#view-hint').textContent = motion.on ? 'Move the device to look around' : 'Drag to look around';
   }
   // The sky is tinted more strongly from inside. There the cloud layer itself
   // lines up with its projection on the dome, so the projection fades out.
@@ -1182,7 +1184,7 @@ function keepOutsideAngle() {
 }
 
 canvas.addEventListener('pointerdown', (ev) => {
-  if (view !== 'inside') return;
+  if (view !== 'inside' || motion.on) return;
   look.drag = { x: ev.clientX, y: ev.clientY };
   canvas.setPointerCapture(ev.pointerId);
 });
@@ -1196,12 +1198,59 @@ canvas.addEventListener('pointermove', (ev) => {
   needsRender = true;
 });
 canvas.addEventListener('pointerup', () => { look.drag = null; });
-canvas.addEventListener('wheel', (ev) => {
-  if (view !== 'inside') return;
-  ev.preventDefault();
-  look.fov = Math.max(30, Math.min(150, look.fov + ev.deltaY * 0.05));
+// The observer's field of view is fixed (no zoom): any wider and the
+// projection distorts the sky noticeably.
+const OBSERVER_FOV = 80;
+
+// ---------------------------------------------------------------- device motion
+//
+// In the observer view, on a phone or tablet, the view can follow the
+// device: hold it up and look around the sky. The device's orientation
+// (alpha, beta, gamma: the deviceorientation event) becomes the camera's,
+// as three.js's old DeviceOrientationControls did. With a compass heading
+// (Android's deviceorientationabsolute, iOS's webkitCompassHeading) the
+// view's north is the real north; without one, north is wherever the
+// device pointed when the sensor started.
+const motion = { on: false, has: false, q: new THREE.Quaternion() };
+const Z_AXIS = new THREE.Vector3(0, 0, 1);
+const motionEuler = new THREE.Euler();
+const qScreen = new THREE.Quaternion();
+const qUp = new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2); // camera looks out of the back of the device
+const motionEvent = 'ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation';
+function onOrientation(ev) {
+  let alpha = ev.alpha;
+  if (typeof ev.webkitCompassHeading === 'number') alpha = 360 - ev.webkitCompassHeading; // iOS
+  if (alpha == null || ev.beta == null || ev.gamma == null) return;
+  const orient = (screen.orientation?.angle ?? window.orientation ?? 0) * DEG;
+  motionEuler.set(ev.beta * DEG, alpha * DEG, -ev.gamma * DEG, 'YXZ');
+  motion.q.setFromEuler(motionEuler).multiply(qUp).multiply(qScreen.setFromAxisAngle(Z_AXIS, -orient));
+  motion.has = true;
   needsRender = true;
-}, { passive: false });
+}
+const hasMotionSensors = typeof DeviceOrientationEvent !== 'undefined'
+  && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+function syncMotionButton() {
+  const b = $('#motion');
+  b.hidden = !(hasMotionSensors && view === 'inside');
+  b.classList.toggle('on', motion.on);
+}
+async function setMotion(on) {
+  if (on && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    // iOS asks first, and only from a tap
+    try {
+      if (await DeviceOrientationEvent.requestPermission() !== 'granted') on = false;
+    } catch { on = false; }
+  }
+  motion.on = on;
+  motion.has = false;
+  if (on) window.addEventListener(motionEvent, onOrientation);
+  else window.removeEventListener(motionEvent, onOrientation);
+  look.drag = null;
+  $('#view-hint').textContent = on ? 'Move the device to look around' : 'Drag to look around';
+  syncMotionButton();
+  needsRender = true;
+}
+$('#motion').addEventListener('click', () => setMotion(!motion.on));
 
 // ---------------------------------------------------------------- stereographic view
 //
@@ -1279,6 +1328,16 @@ function updateInsideCamera() {
   camera.position.set(0, 0.0, 0);
   camera.fov = look.fov;
   camera.updateProjectionMatrix();
+  if (motion.on && motion.has) {
+    // follow the device, smoothed a little against sensor jitter
+    camera.quaternion.slerp(motion.q, 0.35);
+    if (camera.quaternion.angleTo(motion.q) > 1e-3) needsRender = true;
+    // keep the drag view in step, for when motion is turned off
+    const d = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+    look.pitch = Math.asin(Math.max(-1, Math.min(1, d.y)));
+    look.yaw = Math.atan2(d.x, -d.z);
+    return;
+  }
   camera.lookAt(dirFromAzEl(look.yaw, look.pitch));
 }
 
@@ -1939,7 +1998,7 @@ setSunDate(seasonDate('summer'), 'summer');
 // whole sky in view, as an observer turning round would see it; the guides,
 // the outside view and the sky map wait until you have answered.
 const QUIZ_TYPES = Object.keys(TYPES).filter(flatType);
-const QUIZ_LOOK = { pitch: 89.5 * DEG, fov: 150 };
+const QUIZ_LOOK = { pitch: 45 * DEG };
 const answers = $('#quiz-answers');
 const quizTypes = $('#quiz-types');
 const pick = { amount: null, type: null };
@@ -2103,7 +2162,7 @@ function syncQuizLock() {
   const locked = mode === 'quiz' && !quiz.answered;
   const out = $('.view-switch [data-view="outside"]');
   out.disabled = locked;
-  out.title = locked ? 'Answer first: then you can step outside' : '';
+  out.title = locked ? 'Answer first: then the sky cam opens' : '';
   $('.skymap').classList.toggle('hidden', locked);
   // no guide lines in the real sky
   guideGroup.visible = !locked;

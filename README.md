@@ -11,8 +11,11 @@ and is hosted on GitHub Pages without a build step.
   patch. Azimuth sets the horizon the cloud starts from and elevation
   (0–180°) how far it has climbed, over the zenith and down the far side.
   Plain geometry only; the covered area stays exactly fixed.
-- **Outside / Inside views:** orbit the translucent dome from outside, or
-  stand at the observer's position and look around.
+- **Sky cam / Observer views:** orbit the translucent dome from outside, or
+  stand at the observer's position and look around (a fixed 80° field of
+  view). On a phone or tablet, **Motion** (observer view only) makes the view
+  follow the device: hold it up and look around the sky, with north from the
+  device's compass where it has one.
 - **All-sky map and report:** a flat map of the whole dome (equal-area, so
   area on the map is proportional to octas), with the reported octas and the
   sky condition (e.g. `SCT044`) under it; hover for the exact amount.
@@ -46,8 +49,7 @@ and is hosted on GitHub Pages without a build step.
   behind the clouds, and lights the solid clouds, warmer and dimmer when low.
 - **Quiz tab:** a random sky of one cloud type (any of the drawable types)
   at a base around its usual one, covering a random, usually fractional,
-  amount. You start inside, looking straight up with the whole sky in view
-  and no guides. A hint button gives the cloud base, as a ceilometer would.
+  amount. You start in the observer view, looking up, with no guides. A hint button gives the cloud base, as a ceilometer would.
   Answer the amount (and optionally the type); the answer is
   scored with the octa rounding rules and shown with its amount term, base
   and sky condition group (e.g. `BKN035`). The guides, outside view and sky
