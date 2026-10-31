@@ -267,8 +267,11 @@ const domeUniforms = {
   projection: { value: 1 },
   field: { value: fieldTexture },
   threshold: { value: 0 },
-  skyColor: { value: new THREE.Vector3(120 / 255, 170 / 255, 225 / 255) },
-  cloudColor: { value: new THREE.Vector3(244 / 255, 246 / 255, 249 / 255) },
+  // colours are given in sRGB and stored linear (THREE.Color); the shaders
+  // convert to the output's colour space, so they look the same whether
+  // drawn to the screen or into the stereographic view's cube map
+  skyColor: { value: new THREE.Color().setRGB(120 / 255, 170 / 255, 225 / 255, THREE.SRGBColorSpace) },
+  cloudColor: { value: new THREE.Color().setRGB(244 / 255, 246 / 255, 249 / 255, THREE.SRGBColorSpace) },
   skyAlpha: { value: 0.2 },
   cloudAlpha: { value: 0.93 },
 };
@@ -320,6 +323,7 @@ const dome = new THREE.Mesh(
           a = smoothstep(threshold - w, threshold + w, f);
         }
         gl_FragColor = vec4(mix(skyColor, cloudColor, a), mix(skyAlpha, cloudAlpha, a));
+        #include <colorspace_fragment>
       }`,
   }),
 );
@@ -582,6 +586,7 @@ const SURFACE_FRAG = `
     float far = smoothstep(1.0, 4.0, dist / metresPerUnit);
     float beyond = smoothstep(0.92, 1.08, dist / farM);
     gl_FragColor = vec4(color * mix(1.0, 0.6, far), mix(mix(0.95, 0.75, far), 0.1, beyond) * a);
+    #include <colorspace_fragment>
   }`;
 const layerSurface = new THREE.Mesh(
   new THREE.BufferGeometry(),
@@ -626,14 +631,14 @@ function updatePattern() {
     permSeed = p.seed;
   }
   const tint = tintFor(p.base);
-  domeUniforms.cloudColor.value.set(tint[0] / 255, tint[1] / 255, tint[2] / 255);
+  domeUniforms.cloudColor.value.setRGB(tint[0] / 255, tint[1] / 255, tint[2] / 255, THREE.SRGBColorSpace);
   layerSurface.material.uniforms.color.value.setRGB(tint[0] / 255, tint[1] / 255, tint[2] / 255, THREE.SRGBColorSpace);
 }
 
 function updateCloudMeshes() {
   const on = mode === 'layer';
   domeUniforms.layerOn.value = on ? 1 : 0;
-  if (!on) domeUniforms.cloudColor.value.set(CLOUD[0] / 255, CLOUD[1] / 255, CLOUD[2] / 255);
+  if (!on) domeUniforms.cloudColor.value.setRGB(CLOUD[0] / 255, CLOUD[1] / 255, CLOUD[2] / 255, THREE.SRGBColorSpace);
   // The observer's eye is the dome's centre: the figure (to scale, its eye
   // 0.078 units up) stands one eye height below it, as does the ground.
   observer.scale.setScalar((EYE_M * K) / 0.078);
@@ -761,9 +766,12 @@ function setView(v, { yaw, reset = false, instant = false } = {}) {
   // lines up with its projection on the dome, so the projection fades out.
   const a0 = domeUniforms.skyAlpha.value, a1 = v === 'inside' ? 0.62 : 0.2;
   const p0 = domeUniforms.projection.value, p1 = v === 'inside' ? 0 : 1;
+  // ... and the view turns stereographic (see renderStereo)
+  const s0 = stereoUniforms.stereo.value, s1 = v === 'inside' ? 1 : 0;
   animate('sky', ms, (e) => {
     domeUniforms.skyAlpha.value = a0 + (a1 - a0) * e;
     domeUniforms.projection.value = p0 + (p1 - p0) * e;
+    stereoUniforms.stereo.value = s0 + (s1 - s0) * e;
   });
 }
 
@@ -802,9 +810,81 @@ canvas.addEventListener('pointerup', () => { look.drag = null; });
 canvas.addEventListener('wheel', (ev) => {
   if (view !== 'inside') return;
   ev.preventDefault();
-  look.fov = Math.max(30, Math.min(120, look.fov + ev.deltaY * 0.05));
+  look.fov = Math.max(30, Math.min(150, look.fov + ev.deltaY * 0.05));
   needsRender = true;
 }, { passive: false });
+
+// ---------------------------------------------------------------- stereographic view
+//
+// A flat screen cannot show part of a sphere without distortion. Ordinary
+// perspective stretches things toward the edges of the view (by 1/cos of the
+// angle off-centre), so a round cloud turns oval as you look away from it.
+// Inside the dome the view is stereographic instead: it keeps shapes, so a
+// circle on the sky stays a circle wherever it is on screen (things only grow
+// a little toward the edges). The scene is drawn into a cube map around the
+// camera, then each screen pixel looks up its direction:
+//   perspective:    angle off-centre = atan(r tan(fov/2))
+//   stereographic:  angle off-centre = 2 atan(r tan(fov/4))
+// with r the distance from the screen centre (1 at the top edge). `stereo`
+// blends the two, so flying in and out changes the view smoothly.
+const cubeTarget = new THREE.WebGLCubeRenderTarget(1024, { type: THREE.HalfFloatType });
+const cubeCamera = new THREE.CubeCamera(1e-4, 1e4, cubeTarget);
+const stereoUniforms = {
+  cube: { value: cubeTarget.texture },
+  right: { value: new THREE.Vector3() },
+  up: { value: new THREE.Vector3() },
+  forward: { value: new THREE.Vector3() },
+  aspect: { value: 1 },
+  fov: { value: 80 * DEG },
+  stereo: { value: 0 },
+};
+const stereoScene = new THREE.Scene();
+const stereoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+stereoScene.add(new THREE.Mesh(
+  new THREE.PlaneGeometry(2, 2),
+  new THREE.ShaderMaterial({
+    uniforms: stereoUniforms,
+    depthTest: false,
+    depthWrite: false,
+    vertexShader: `
+      varying vec2 vXY;
+      void main() {
+        vXY = position.xy;
+        gl_Position = vec4(position.xy, 0.0, 1.0);
+      }`,
+    fragmentShader: `
+      uniform samplerCube cube;
+      uniform vec3 right, up, forward;
+      uniform float aspect, fov, stereo;
+      varying vec2 vXY;
+      void main() {
+        vec2 p = vec2(vXY.x * aspect, vXY.y);
+        float r = length(p);
+        float persp = atan(r * tan(0.5 * fov));
+        float stereog = 2.0 * atan(r * tan(0.25 * fov));
+        float th = mix(persp, stereog, stereo);
+        vec2 u = r > 1e-6 ? p / r : vec2(0.0);
+        vec3 dir = cos(th) * forward + sin(th) * (u.x * right + u.y * up);
+        gl_FragColor = textureCube(cube, dir);
+        #include <colorspace_fragment>
+      }`,
+  }),
+));
+// the cube map holds linear colour at half-float precision
+cubeTarget.texture.colorSpace = THREE.LinearSRGBColorSpace;
+
+function renderStereo() {
+  camera.updateMatrixWorld();
+  const m = camera.matrixWorld.elements;
+  stereoUniforms.right.value.set(m[0], m[1], m[2]).normalize();
+  stereoUniforms.up.value.set(m[4], m[5], m[6]).normalize();
+  stereoUniforms.forward.value.set(-m[8], -m[9], -m[10]).normalize();
+  stereoUniforms.aspect.value = camera.aspect;
+  stereoUniforms.fov.value = camera.fov * DEG;
+  cubeCamera.position.copy(camera.position);
+  cubeCamera.update(renderer, scene);
+  renderer.render(stereoScene, stereoCamera);
+}
 
 function updateInsideCamera() {
   camera.position.set(0, 0.0, 0);
@@ -1100,7 +1180,8 @@ function frame(now) {
   // and a still scene needs no redrawing.
   if (needsRender) {
     needsRender = false;
-    renderer.render(scene, camera);
+    if (stereoUniforms.stereo.value > 0.001) renderStereo();
+    else renderer.render(scene, camera);
   }
   requestAnimationFrame(frame);
 }
