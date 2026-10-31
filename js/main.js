@@ -4,7 +4,9 @@ import {
   W, H, N, grid, computeField, solveThreshold, coverFromField,
   reportedOctas, makeNoise3, mulberry32, vertSliceFrame, vertSliceCentre, patchCentre,
 } from './sky.js';
-import { layerField, layerArea, EARTH_R, P_OCC, ELEMENT_R } from './layer.js';
+import {
+  layerField, layerArea, bakeTexture, EARTH_R, ELEMENT_R, TILE, CELLS, DECODE_GLSL,
+} from './layer.js';
 
 const DEG = Math.PI / 180;
 const FT = 0.3048; // metres per foot
@@ -26,8 +28,8 @@ function setForm(p, v) {
   p.modifier = v < 0 ? 'cumuli' : v > 0 ? 'strati' : 'none';
   p.amount = Math.abs(v);
 }
-// The cloud layer is kept to plain geometry: one flat round patch on a flat
-// layer, no texture.
+// The cloud layer: one round patch on a flat layer, broken up by a texture
+// that lives on the layer (form, shared with the Celestial dome tab).
 const layerParams = {
   etage: 'low', shape: 'cap', azimuth: 270, elevation: 25, // round patch only
   form: 0, modifier: 'none', amount: 0, octas: 1,
@@ -132,8 +134,15 @@ function domeGeometry(segA = 192, segE = 64) {
 // layer.js; the hash and noise below copy layer.js and sky.js exactly).
 // Cloudiness = shape field for the line of sight + amount x the texture where
 // that line of sight meets the layer; cloud where it exceeds layerT.
-const permTexture = new THREE.DataTexture(new Uint8Array(512), 512, 1, THREE.RedFormat, THREE.UnsignedByteType);
-let permSeed = null;
+// The cumuli and strati textures are baked once into a repeating tile
+// (layer.js bakeTexture) and sampled with mipmaps: one lookup per pixel.
+const cloudTex = new THREE.DataTexture(new Uint8Array(TILE * TILE), TILE, TILE, THREE.RedFormat, THREE.UnsignedByteType);
+cloudTex.wrapS = cloudTex.wrapT = THREE.RepeatWrapping;
+cloudTex.magFilter = THREE.LinearFilter;
+cloudTex.minFilter = THREE.LinearMipmapLinearFilter;
+cloudTex.generateMipmaps = true;
+cloudTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+let cloudTexKey = null;
 const layerUniforms = {
   shapeKind: { value: 0 }, // 0 horizontal slice, 1 vertical slice, 2 round patch
   modKind: { value: 1 }, // 0 none, 1 cumuli, 2 strati
@@ -146,13 +155,13 @@ const layerUniforms = {
   layerT: { value: 0 },
   layerHeight: { value: 1200 }, // cloud base above the eye, m
   layerFade: { value: 1 }, // fades the clouds out and in when the layer is swapped
-  perm: { value: permTexture },
+  cloudTex: { value: cloudTex },
 };
 const LAYER_GLSL = `
   uniform int shapeKind, modKind, seed;
   uniform float shapeAz, sliceCentre, texSize, amount, layerT, layerHeight, layerFade;
   uniform vec3 capDir;
-  uniform sampler2D perm;
+  uniform sampler2D cloudTex;
   const float LPI = 3.141592653589793;
 
   // sky.js shapeField, for a unit sky direction s = (east, north, up)
@@ -168,85 +177,24 @@ const LAYER_GLSL = `
     return -acos(clamp(dot(s, capDir), -1.0, 1.0));
   }
 
-  // layer.js hash3
-  uvec3 hash3(int ix, int iy) {
-    uint h = (uint(ix) * 0x27d4eb2du) ^ (uint(iy) * 0x165667b1u) ^ (uint(seed) * 0x9e3779b1u);
-    h = (h ^ (h >> 15u)) * 0x85ebca6bu;
-    h = (h ^ (h >> 13u)) * 0xc2b2ae35u;
-    h ^= h >> 16u;
-    uint g = (h ^ 0x5bd1e995u) * 0x01000193u;
-    g ^= g >> 15u;
-    uint q = (g ^ 0x2545f491u) * 0x9e3779b1u;
-    q ^= q >> 13u;
-    return uvec3(h, g, q);
+  // layer.js sampleTexture: the baked tile repeats every CELLS lattice spacings
+  float layerTex(vec2 p) {
+    float t = texture2D(cloudTex, p / (texSize * ${CELLS.toFixed(1)})).r;
+    return ${DECODE_GLSL};
   }
-  // layer.js cumuliTexture
-  float cumuli(vec2 p) {
-    int ix = int(floor(p.x / texSize)), iy = int(floor(p.y / texSize));
-    float r = ${ELEMENT_R.toFixed(3)} * texSize, best = -1.0;
-    for (int ox = -1; ox <= 1; ox++) for (int oy = -1; oy <= 1; oy++) {
-      uvec3 h = hash3(ix + ox, iy + oy);
-      if (float(h.x) / 4294967296.0 >= ${P_OCC.toFixed(3)}) continue;
-      vec2 c = (vec2(float(ix + ox), float(iy + oy)) + vec2(h.yz) / 4294967296.0) * texSize;
-      best = max(best, 1.0 - length(c - p) / r);
-    }
-    return best;
-  }
-
-  // sky.js makeNoise3, and layer.js stratiTexture
-  int P(int i) { return int(texelFetch(perm, ivec2(i, 0), 0).r * 255.0 + 0.5); }
-  float grad(int h, float x, float y, float z) {
-    h &= 15;
-    float u = h < 8 ? x : y;
-    float v = h < 4 ? y : (h == 12 || h == 14 ? x : z);
-    return ((h & 1) == 0 ? u : -u) + ((h & 2) == 0 ? v : -v);
-  }
-  float fade(float t) { return t * t * t * (t * (t * 6.0 - 15.0) + 10.0); }
-  float noise(vec3 p) {
-    int X = int(floor(p.x)) & 255, Y = int(floor(p.y)) & 255, Z = int(floor(p.z)) & 255;
-    vec3 f = p - floor(p);
-    float u = fade(f.x), v = fade(f.y), w = fade(f.z);
-    int A = P(X) + Y, AA = P(A) + Z, AB = P(A + 1) + Z;
-    int B = P(X + 1) + Y, BA = P(B) + Z, BB = P(B + 1) + Z;
-    float x = f.x, y = f.y, z = f.z;
-    return mix(
-      mix(mix(grad(P(AA), x, y, z), grad(P(BA), x - 1.0, y, z), u),
-          mix(grad(P(AB), x, y - 1.0, z), grad(P(BB), x - 1.0, y - 1.0, z), u), v),
-      mix(mix(grad(P(AA + 1), x, y, z - 1.0), grad(P(BA + 1), x - 1.0, y, z - 1.0), u),
-          mix(grad(P(AB + 1), x, y - 1.0, z - 1.0), grad(P(BB + 1), x - 1.0, y - 1.0, z - 1.0), u), v),
-      w);
-  }
-  float strati(vec2 p) {
-    vec2 q = p / texSize;
-    return noise(vec3(q, 0.37)) + 0.45 * noise(vec3(q * 2.3 + vec2(17.0, 0.0), 1.7));
-  }
-  float layerTex(vec2 p) { return modKind == 1 ? cumuli(p) : strati(p); }
 
   // Cloud amount (0..1). r, rw: the shape field here and its change across a
   // pixel. g: where the line of sight meets the layer; ddx, ddy: how far g
-  // moves across one pixel. Toward the horizon a pixel covers a long, thin
-  // strip of the layer, so the texture is averaged along the strip's long
-  // axis, and only where even its short axis outgrows the texture does it
-  // give way to the expected cover.
+  // moves across one pixel. The texture's mipmaps average it over the pixel;
+  // where even the pixel's short axis outgrows the texture's features it
+  // gives way to the expected cover.
   float layerCloud(float r, float rw, vec2 g, vec2 ddx, vec2 ddy) {
     if (modKind == 0) return smoothstep(layerT - rw, layerT + rw, r) * layerFade;
     float feature = modKind == 1 ? 2.0 * ${ELEMENT_R.toFixed(3)} * texSize : 0.5 * texSize;
-    float lx = length(ddx), ly = length(ddy);
-    vec2 major = lx > ly ? ddx : ddy;
-    float minor = max(min(lx, ly), 1e-3);
+    float minor = max(min(length(ddx), length(ddy)), 1e-3);
     float k = smoothstep(0.3, 1.0, minor / feature);
     float w = rw + 1.5 * amount * minor / feature;
-    float c = 0.0;
-    if (k < 0.999) {
-    #ifdef ONE_SAMPLE
-      c = smoothstep(layerT - w, layerT + w, r + amount * layerTex(g));
-    #else
-      vec4 f = r + amount * vec4(layerTex(g - 0.375 * major), layerTex(g - 0.125 * major),
-                                 layerTex(g + 0.125 * major), layerTex(g + 0.375 * major));
-      vec4 s = smoothstep(vec4(layerT - w), vec4(layerT + w), f);
-      c = 0.25 * (s.x + s.y + s.z + s.w);
-    #endif
-    }
+    float c = smoothstep(layerT - w, layerT + w, r + amount * layerTex(g));
     float expected = smoothstep(layerT - amount, layerT + amount, r);
     return mix(c, expected, k) * layerFade;
   }
@@ -594,8 +542,6 @@ const layerSurface = new THREE.Mesh(
     uniforms: { ...layerUniforms, metresPerUnit, farM: { value: FAR_M }, color: { value: new THREE.Color(0xeef1f5) } },
     vertexShader: SURFACE_VERT,
     fragmentShader: SURFACE_FRAG,
-    // seen from outside, one sample per pixel is enough (the dome uses four)
-    defines: { ONE_SAMPLE: '' },
     side: THREE.DoubleSide,
     transparent: true,
     depthWrite: true, // so the dome is hidden where the layer lies in front of it
@@ -625,10 +571,11 @@ function updatePattern() {
   U.amount.value = p.amount;
   U.layerT.value = Math.max(-1e4, Math.min(1e4, layerThreshold));
   U.layerHeight.value = Math.max(1, p.base - EYE_M);
-  if (permSeed !== p.seed) {
-    permTexture.image.data.set(noiseFor(p.seed).perm);
-    permTexture.needsUpdate = true;
-    permSeed = p.seed;
+  const key = `${p.modifier}:${p.seed}`;
+  if (p.modifier !== 'none' && cloudTexKey !== key) {
+    cloudTex.image.data.set(bakeTexture(p.modifier, p.seed));
+    cloudTex.needsUpdate = true;
+    cloudTexKey = key;
   }
   const tint = tintFor(p.base);
   domeUniforms.cloudColor.value.setRGB(tint[0] / 255, tint[1] / 255, tint[2] / 255, THREE.SRGBColorSpace);
@@ -1210,17 +1157,16 @@ const domeCtl = {
 // The Form slider: cumuli to the left, strati to the right, none in the
 // middle. Values near the middle snap to exactly zero, so it is easy to find.
 const fmtForm = (v) => (v < 0 ? `cumuli ${(-v).toFixed(2)}` : v > 0 ? `strati ${v.toFixed(2)}` : 'none');
-function bindForm(id, p, after) {
+function bindForm(id, p, after, minOf = () => -Infinity) {
   const input = $(`#${id}`);
   const out = $(`#${id}-out`);
   const snap = 0.06 * parseFloat(input.max);
   const show = () => { input.value = p.form; out.textContent = fmtForm(p.form); };
   input.addEventListener('input', () => {
     let v = parseFloat(input.value);
-    if (Math.abs(v) < snap) {
-      v = 0;
-      input.value = 0;
-    }
+    if (v < minOf()) v = minOf();
+    if (Math.abs(v) < snap) v = 0;
+    input.value = v;
     const was = p.modifier;
     setForm(p, v);
     out.textContent = fmtForm(v);
@@ -1322,6 +1268,8 @@ const layerCtl = {
   base: bindHeight('lbase', 'base'),
   azimuth: bindRange('laz', layerParams, 'azimuth', (v) => `${v}°`),
   centre: bindRange('lcentre', layerParams, 'elevation', (v) => `${v}°`),
+  // no cumuliform clouds in the high étage
+  form: bindForm('lform', layerParams, undefined, () => (layerParams.etage === 'high' ? 0 : -Infinity)),
 };
 // Coverage seen on the dome, in whole octas.
 const lchips = $('#lcover-chips');
@@ -1358,6 +1306,7 @@ function syncLayerControls() {
   const { etage } = layerParams;
   $$('#etage button').forEach((b) => b.classList.toggle('on', b.dataset.etage === etage));
   $('#genus').textContent = GENUS[etage];
+  $('#lform-cumuli').classList.toggle('off', etage === 'high');
   layerCtl.base.sync();
   syncLayerChips();
   dirty = true;
@@ -1371,6 +1320,10 @@ $$('#etage button').forEach((b) => b.addEventListener('click', () => {
   // the outside view reframes for the new étage alongside
   const s0 = viewScaleWanted, s1 = layerViewScale();
   animate('viewScale', 1500, (e) => { viewScaleWanted = s0 + (s1 - s0) * e; });
+  if (layerParams.etage === 'high' && layerParams.form < 0) {
+    const f0 = layerParams.form;
+    animate('lform', 900, (e) => { layerCtl.form.set(f0 * (1 - e)); dirty = true; });
+  }
   syncLayerControls();
 }));
 syncLayerControls();
@@ -1466,10 +1419,12 @@ $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
   if (next === 'layer') {
     layerCtl.azimuth.set(shapeParams.azimuth);
     layerCtl.centre.set(shapeParams.elevation);
+    layerCtl.form.set(layerParams.etage === 'high' ? Math.max(0, shapeParams.form) : shapeParams.form);
     syncLayerControls();
   } else if (next === 'octas' && prev === 'layer') {
     domeCtl.azimuth.set(layerParams.azimuth);
     domeCtl.elevation.set(layerParams.elevation);
+    domeCtl.form.set(layerParams.form);
   }
   if ((prev === 'layer') === (next === 'layer')) {
     // octas <-> quiz: same scene, so the sky morphs from one to the other

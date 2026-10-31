@@ -126,6 +126,11 @@
             <input type="range" id="lcentre" min="0" max="180" step="1" value="25">
           </label>
         </div>
+        <label class="field form-slider">
+          <span>Form <output id="lform-out"></output></span>
+          <input type="range" id="lform" min="-3" max="3" step="0.05" value="0" list="form-centre">
+          <div class="form-ends" aria-hidden="true"><span id="lform-cumuli">Cumuli</span><span>none</span><span>Strati</span></div>
+        </label>
 
         <div class="field units">
           <span>Heights in</span>
@@ -148,7 +153,9 @@
             and the patch becomes a long oval far off. The patch is sized so
             it covers exactly the chosen octas of the dome, at any height, so
             the same octas take a bigger cloud the higher the layer: the
-            readout shows its real size on the layer.
+            readout shows its real size on the layer. Form breaks it into
+            cumuli or strati that lie on the layer itself, so they crowd
+            together toward the horizon.
           </p>
           <p class="help">
             One cloud layer, parallel to the ground, seen by the observer at

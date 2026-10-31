@@ -16,9 +16,10 @@
 // Lines of sight follow the Earth's curve: a ray leaving at elevation e has
 // height z(d) = d tan(e) + d^2 / (2R) after horizontal distance d, so even a
 // ray aimed exactly at the horizon reaches the layer (about sqrt(2Rh) away).
-// The GPU copy of all this lives in main.js (LAYER_GLSL) and must match.
+// The GPU copy of all this lives in main.js (LAYER_GLSL) and must match; the
+// textures themselves are shared, baked once below.
 
-import { grid, W, H, shapeField, makeNoise3 } from './sky.js';
+import { grid, W, H, shapeField } from './sky.js';
 
 export const EARTH_R = 6371000;
 export const P_OCC = 0.85; // fraction of lattice cells holding a cumulus element
@@ -46,35 +47,84 @@ function hash3(ix, iy, seed) {
   return [a, b, c];
 }
 
-// Cumuli: rounded elements on a lattice of the given spacing, one per
-// occupied cell at a random spot in it. 1 at an element's centre, 0 at its
-// edge, falling to -1 between elements.
-export function cumuliTexture(x, y, spacing, seed) {
-  const ix = Math.floor(x / spacing), iy = Math.floor(y / spacing);
-  const r = ELEMENT_R * spacing;
+// The textures are baked once into a tile that repeats across the layer:
+// TILE x TILE texels holding CELLS x CELLS features. The GPU samples the
+// same bytes (with mipmaps, so a pixel looking far along the layer sees the
+// texture averaged instead of flickering), and the CPU reads them back with
+// the same bilinear filter for the octa numbers.
+export const TILE = 1024;
+export const CELLS = 16;
+const ENC = 1.5; // byte b stands for (b / 255) * 2 ENC - ENC
+
+// Cumuli: rounded elements on a lattice, one per occupied cell at a random
+// spot in it. 1 at an element's centre, 0 at its edge, falling to -1 between
+// elements. x, y in lattice spacings.
+function cumuliAt(x, y, seed) {
+  const ix = Math.floor(x), iy = Math.floor(y);
   let best = -1;
   for (let ox = -1; ox <= 1; ox++) {
     for (let oy = -1; oy <= 1; oy++) {
-      const [occ, jx, jy] = hash3(ix + ox, iy + oy, seed);
+      const cx0 = ix + ox, cy0 = iy + oy;
+      const [occ, jx, jy] = hash3(((cx0 % CELLS) + CELLS) % CELLS, ((cy0 % CELLS) + CELLS) % CELLS, seed);
       if (occ >= P_OCC) continue;
-      const cx = (ix + ox + jx) * spacing, cy = (iy + oy + jy) * spacing;
-      const v = 1 - Math.hypot(cx - x, cy - y) / r;
+      const v = 1 - Math.hypot(cx0 + jx - x, cy0 + jy - y) / ELEMENT_R;
       if (v > best) best = v;
     }
   }
-  return best;
+  return Math.max(-1, best);
 }
 
-// Strati: smooth random sheet with features about `size` across, about -1..1.
-const noiseCache = new Map();
-export function noiseFor(seed) {
-  if (!noiseCache.has(seed)) noiseCache.set(seed, makeNoise3(seed));
-  return noiseCache.get(seed);
+// Strati: smooth gradient noise that repeats every `period` lattice units.
+function tileNoise(x, y, period, seed) {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  const fx = x - ix, fy = y - iy;
+  const g = (cx, cy) => {
+    const [a] = hash3(((cx % period) + period) % period, ((cy % period) + period) % period, seed);
+    const t = a * 2 * Math.PI;
+    return (cx0, cy0) => Math.cos(t) * cx0 + Math.sin(t) * cy0;
+  };
+  const fade = (t) => t * t * t * (t * (t * 6 - 15) + 10);
+  const u = fade(fx), v = fade(fy);
+  const n00 = g(ix, iy)(fx, fy), n10 = g(ix + 1, iy)(fx - 1, fy);
+  const n01 = g(ix, iy + 1)(fx, fy - 1), n11 = g(ix + 1, iy + 1)(fx - 1, fy - 1);
+  const a = n00 + (n10 - n00) * u, b = n01 + (n11 - n01) * u;
+  return 1.4 * (a + (b - a) * v);
 }
-export function stratiTexture(x, y, size, seed) {
-  const noise = noiseFor(seed);
-  const f = 1 / size;
-  return noise(x * f, y * f, 0.37) + 0.45 * noise(x * f * 2.3 + 17, y * f * 2.3, 1.7);
+function stratiAt(x, y, seed) {
+  return tileNoise(x, y, CELLS, seed) + 0.45 * tileNoise(2 * x + 3, 2 * y, 2 * CELLS, seed + 7);
+}
+
+const bakeCache = new Map();
+export function bakeTexture(kind, seed) {
+  const key = `${kind}:${seed}`;
+  if (bakeCache.has(key)) return bakeCache.get(key);
+  const f = kind === 'cumuli' ? cumuliAt : stratiAt;
+  const data = new Uint8Array(TILE * TILE);
+  const per = CELLS / TILE;
+  for (let j = 0; j < TILE; j++) {
+    for (let i = 0; i < TILE; i++) {
+      const v = f((i + 0.5) * per, (j + 0.5) * per, seed);
+      data[j * TILE + i] = Math.round(((Math.max(-ENC, Math.min(ENC, v)) + ENC) / (2 * ENC)) * 255);
+    }
+  }
+  bakeCache.set(key, data);
+  return data;
+}
+// GLSL decode of a sampled byte (0..1) back to texture value
+export const DECODE_GLSL = `(t * ${(2 * ENC).toFixed(3)} - ${ENC.toFixed(3)})`;
+
+// Bilinear, wrapping read of a baked tile, as the GPU's linear filter does.
+// x, y in metres; size: the lattice spacing in metres.
+export function sampleTexture(data, x, y, size) {
+  const s = TILE / CELLS / size;
+  const u = x * s - 0.5, v = y * s - 0.5;
+  const i0 = Math.floor(u), j0 = Math.floor(v);
+  const fu = u - i0, fv = v - j0;
+  const M = TILE - 1;
+  const i = i0 & M, i1 = (i0 + 1) & M, j = (j0 & M) * TILE, j1 = ((j0 + 1) & M) * TILE;
+  const a = data[j + i] + (data[j + i1] - data[j + i]) * fu;
+  const b = data[j1 + i] + (data[j1 + i1] - data[j1 + i]) * fu;
+  return ((a + (b - a) * fv) / 255) * 2 * ENC - ENC;
 }
 
 // Cloudiness for every sky-grid direction. params: shape fields as on the
@@ -84,13 +134,13 @@ export function layerField(params, out) {
   shapeField(params, out);
   const { modifier, amount, size, seed, height } = params;
   if (modifier === 'none' || !(amount > 0)) return out;
-  const tex = modifier === 'cumuli' ? cumuliTexture : stratiTexture;
+  const data = bakeTexture(modifier, seed);
   for (let j = 0; j < H; j++) {
     const d = distanceToHeight(grid.el[j * W], height);
     for (let i = 0; i < W; i++) {
       const k = j * W + i;
       const a = grid.az[k];
-      out[k] += amount * tex(d * Math.sin(a), d * Math.cos(a), size, seed);
+      out[k] += amount * sampleTexture(data, d * Math.sin(a), d * Math.cos(a), size);
     }
   }
   return out;

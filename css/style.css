@@ -287,3 +287,4 @@ code { font-size: 12.5px; background: var(--chip); padding: 1px 4px; border-radi
 
 /* explanatory notes sit at the very bottom of each tab's controls */
 .notes-bottom { margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--line); }
+.form-ends .off { opacity: 0.35; text-decoration: line-through; }

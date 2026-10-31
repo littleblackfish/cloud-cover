@@ -18,7 +18,10 @@ and is hosted on GitHub Pages without a build step.
   projection, area on the map is proportional to octas.
 - **Cloud layer tab:** one flat round patch on a flat cloud layer in the
   low, mid or high étage, sized to cover exactly the chosen octas of the
-  dome. Azimuth and elevation (shared with the Celestial dome tab) place it.
+  dome. Azimuth, elevation and form (shared with the Celestial dome tab)
+  place it and break it up; the cumuli or strati texture lies on the layer
+  itself, so perspective squeezes it toward the horizon. No cumuli in the
+  high étage.
   The scene is to scale and follows the Earth's curve: an observer with eyes
   1.7 m up, a dome whose radius is the distance to their horizon (4.65 km),
   the ground inside it, and the layer drawn out to the observer's line of
