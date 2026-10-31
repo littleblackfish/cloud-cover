@@ -477,6 +477,49 @@ const groundLayer = new THREE.Mesh(curvedDisc(REACH, 160, 8), groundMaterial);
 groundLayer.position.y = GROUND_Y;
 scene.add(groundLayer);
 
+// A common frame for both tabs, beyond the observer's own horizon:
+//
+// The rest of the planet: the ground carries on past the horizon, curving
+// away below it, drawn faintly out to PLANET_M.
+//
+// An outer dome of radius FAR_M, standing on the curved ground. Clouds much
+// beyond it sit within about a degree of the horizon, too low to judge, so it
+// marks the practical limit of the sky an observer sees. 66 km is a working
+// figure rather than a standard one: a 4,000 ft cloud base 66 km away is
+// only about 0.8 degrees above the horizon.
+const FAR_M = 66000;
+const FAR = FAR_M * K;
+const PLANET_M = 600000;
+function curvedRing(r0, r1, segments, rings) {
+  const g = new THREE.RingGeometry(r0, r1, segments, rings);
+  g.rotateX(-Math.PI / 2);
+  const pos = g.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    pos.setY(i, -drop(Math.hypot(pos.getX(i), pos.getZ(i)) / K));
+  }
+  return g;
+}
+const planet = new THREE.Mesh(
+  curvedRing(REACH, PLANET_M * K, 192, 96),
+  new THREE.MeshBasicMaterial({ color: 0x33402f, transparent: true, opacity: 0.3, depthWrite: false, side: THREE.DoubleSide }),
+);
+planet.position.y = GROUND_Y;
+scene.add(planet);
+const farDome = (() => {
+  // reach down past the eye's horizontal plane until the rim meets the
+  // curved ground (EYE_M plus the Earth's drop at FAR_M below the eye)
+  const dip = Math.atan2(EYE_M + (FAR_M * FAR_M) / (2 * EARTH_R), FAR_M);
+  const g = new THREE.SphereGeometry(FAR, 128, 48, 0, 2 * Math.PI, 0, Math.PI / 2 + dip);
+  const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+    color: 0xaec6e0, transparent: true, opacity: 0.07, depthWrite: false, side: THREE.DoubleSide,
+  }));
+  const rim = circleLine(-dip, FAR, 0xaec6e0, 0.6);
+  const grp = new THREE.Group();
+  grp.add(m, rim);
+  scene.add(grp);
+  return grp;
+})();
+
 // The observer is far too small to see at this scale, so a marker of fixed
 // on-screen size shows where they stand.
 const observerMarker = (() => {
@@ -536,6 +579,7 @@ const SURFACE_FRAG = `
   #include <logdepthbuf_pars_fragment>
   uniform vec3 color;
   uniform float metresPerUnit; // also the dome's radius in metres
+  uniform float farM; // the outer dome's radius in metres
   varying vec2 vGround;
   ${LAYER_GLSL}
   void main() {
@@ -546,15 +590,18 @@ const SURFACE_FRAG = `
     float r = region(s), rw = fwidth(r);
     float a = s.z < 0.0 ? 0.0 : layerCloud(r, rw, vGround, dFdx(vGround), dFdy(vGround));
     // Only the cloud patch is drawn. Full brightness inside the dome,
-    // dimming with distance beyond it.
+    // dimming with distance beyond it; past the outer dome (farM) only a
+    // trace of it shows.
     if (a < 0.01) discard;
-    float far = smoothstep(1.0, 4.0, length(vec3(vGround, layerHeight)) / metresPerUnit);
-    gl_FragColor = vec4(color * mix(1.0, 0.6, far), mix(0.95, 0.75, far) * a);
+    float dist = length(vec3(vGround, layerHeight));
+    float far = smoothstep(1.0, 4.0, dist / metresPerUnit);
+    float beyond = smoothstep(0.92, 1.08, dist / farM);
+    gl_FragColor = vec4(color * mix(1.0, 0.6, far), mix(mix(0.95, 0.75, far), 0.1, beyond) * a);
   }`;
 const layerSurface = new THREE.Mesh(
   new THREE.BufferGeometry(),
   new THREE.ShaderMaterial({
-    uniforms: { ...layerUniforms, metresPerUnit, color: { value: new THREE.Color(0xeef1f5) } },
+    uniforms: { ...layerUniforms, metresPerUnit, farM: { value: FAR_M }, color: { value: new THREE.Color(0xeef1f5) } },
     vertexShader: SURFACE_VERT,
     fragmentShader: SURFACE_FRAG,
     // seen from outside, one sample per pixel is enough (the dome uses four)
@@ -627,6 +674,10 @@ orbit.enableDamping = true;
 orbit.minDistance = 1.2;
 orbit.maxDistance = 7; // widened in cloud-layer mode
 orbit.maxPolarAngle = Math.PI / 2 + 0.35;
+// The controls apply zooms (and some moves) inside their own event handlers,
+// so redraw whenever they report a change, not only when the frame loop sees
+// one.
+orbit.addEventListener('change', () => { needsRender = true; });
 
 const look = { yaw: 0, pitch: 25 * DEG, fov: 80, drag: null };
 
@@ -660,7 +711,7 @@ function setOrbitLimits() {
     orbit.maxDistance = 150; // far enough to see the whole layer, out to the line of sight
     orbit.maxPolarAngle = Math.PI / 2 - 0.01; // stay above the ground
   } else {
-    orbit.maxDistance = 7;
+    orbit.maxDistance = 40; // room to zoom out past the outer dome
     orbit.maxPolarAngle = Math.PI / 2 + 0.35;
   }
 }
