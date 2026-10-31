@@ -22,10 +22,11 @@ and is hosted on GitHub Pages without a build step.
   METARs: CI, CC, CS, AC, ACC, AS, NS, SC, ST, SF, CU, CF, TCU and CB. Each
   type's pattern lies on the layer, sized
   so its elements look the right size from the ground (CC grains under 1°,
-  AC 1–5°, SC over 5°), so it crowds together toward the horizon. CU, TCU,
-  CB and ACC also have height: lines of sight are traced up through the
-  clouds, so toward the horizon you see their sides (white, over dark flat
-  bases) and the gaps between them close up. Picking a
+  AC 1–5°, SC over 5°), so it crowds together toward the horizon. CU, TCU and
+  CB are solid 3D clouds (clusters of lumpy spheres with flat bases, lit by
+  the sun; see js/cumulus.js): coverage is set by growing every cloud from
+  its base, solved exactly per sky direction, so toward the horizon their
+  sides fill the gaps. ACC has turrets traced through their height. Picking a
   type moves the layer to its usual base, and the base slider covers the
   type's range; the étage follows from the base. Bases, base ranges and
   descriptions follow MANOBS (8th edition) table 7-1; the readout gives the
@@ -84,6 +85,7 @@ No internet access is needed at runtime: three.js is vendored in `vendor/`
 - `js/sky.js`: sky grid with solid-angle weights, shape fields, the
   equal-area threshold solver and octa rounding
 - `js/layer.js`: cloud-layer field (shape + texture on the layer)
+- `js/cumulus.js`: solid cumuliform clouds (layout, shapes, exact coverage)
 - `js/main.js`: 3D scene, all-sky map and UI
 
 ## Caveat

@@ -175,7 +175,8 @@ const mixRGB = (a, b, t) => a.map((v, i) => Math.round(lerp(v, b[i], t)));
 //            base (m). Lines of sight are traced up through that height, so
 //            near the horizon you see their sides and the gaps close up.
 //   profile  the power in the profile: 2 domes, higher steeper-sided towers
-//   anvil    how far the top spreads out (cumulonimbus)
+//   anvil    how far the top spreads out
+//   solid    drawn as solid shapes instead: cumulus.js
 export const TYPES = {
   CI: {
     name: 'Cirrus', etage: 'high', baseFt: 29000, baseRangeFt: [20000, 39000],
@@ -309,8 +310,8 @@ export const TYPES = {
     name: 'Cumulus', etage: 'low', baseFt: 4000, baseRangeFt: [1500, 10000],
     tileM: 8000, featureM: 500, amount: 1.1, blotch: 0.4, soft: 0.01,
     opacity: 1, grey: [168, 173, 182], shade: 0.15, angle: 0, res: 512,
-    // heaps about as tall as they are wide
-    topM: 1200,
+    // drawn as solid shapes (cumulus.js)
+    solid: true,
     help: 'Cumulus (CU): detached, generally dense clouds with sharp outlines, rising in mounds, domes or towers like a cauliflower; dazzling white in the sun, with dark, almost flat bases. Base usually 1,500–6,500 ft, up to 10,000 ft or higher in very dry summer air.',
     gen(u, v, s) {
       // detached heaps about 1 km across, lumpy (cauliflower) all over
@@ -335,8 +336,8 @@ export const TYPES = {
     name: 'Towering cumulus', etage: 'low', baseFt: 4000, baseRangeFt: [1500, 10000],
     tileM: 12000, featureM: 1200, amount: 1.2, blotch: 0.4, soft: 0.01,
     opacity: 1, grey: [150, 156, 166], shade: 0.15, angle: 0, res: 512,
-    // towers two to three times taller than wide, steep sided
-    topM: 5500, profile: 5,
+    // drawn as solid shapes (cumulus.js)
+    solid: true,
     help: 'Towering cumulus (TCU): strongly sprouting cumulus with sharp outlines and often great vertical extent, its top like a cauliflower; sides white in the sun, base dark, flat and almost horizontal overhead. Base usually 1,500–6,500 ft, up to 10,000 ft or higher.',
     gen(u, v, s) {
       const [a, b] = warp(u, v, 6, 0.2, s);
@@ -349,8 +350,8 @@ export const TYPES = {
     name: 'Cumulonimbus', etage: 'low', baseFt: 3500, baseRangeFt: [1500, 10000],
     tileM: 40000, featureM: 4000, amount: 1.4, blotch: 0.3, soft: 0.01,
     opacity: 1, grey: [108, 114, 124], shade: 0.15, angle: 0, res: 512,
-    // a mountain of cloud up to 10 km, spreading into an anvil near the top
-    topM: 10000, profile: 5, anvil: 0.85,
+    // drawn as solid shapes (cumulus.js)
+    solid: true,
     help: 'Cumulonimbus (CB): a heavy, dense cloud of great vertical extent, like a mountain or huge tower, its top often flattened and spread into an anvil; under its often very dark base, ragged low clouds and precipitation. Base usually 1,500–6,500 ft, up to 10,000 ft or higher.',
     gen(u, v, s) {
       const [a, b] = warp(u, v, 4, 0.2, s);

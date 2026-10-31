@@ -8,6 +8,7 @@ import {
   layerField, layerArea, bakeType, bakeBlotches, prebake, TYPES, TYPE_ROWS,
   BLOTCH_SCALE, BLOTCH_ANGLE, EARTH_R, DECODE_GLSL, TOWER_STEPS,
 } from './layer.js';
+import { solidField, solidSpheres, S_MAX, SOLID } from './cumulus.js';
 
 const DEG = Math.PI / 180;
 const FT = 0.3048; // metres per foot
@@ -279,6 +280,9 @@ fieldTexture.minFilter = THREE.LinearFilter;
 const domeUniforms = {
   ...layerUniforms,
   layerOn: { value: 0 },
+  // solid clouds: the dome shows their outline from the sky field, faded
+  // like the cloud layer's projection
+  solidOn: { value: 0 },
   // how much of the cloud layer's projection the dome shows: all of it from
   // outside, none from inside, where the layer itself lines up with it
   projection: { value: 1 },
@@ -315,7 +319,7 @@ const dome = new THREE.Mesh(
       uniform sampler2D field;
       uniform float threshold, skyAlpha, cloudAlpha;
       uniform vec3 skyColor, cloudColor, topColor;
-      uniform int layerOn;
+      uniform int layerOn, solidOn;
       uniform float projection;
       varying vec2 vUv;
       varying vec3 vDir;
@@ -352,6 +356,7 @@ const dome = new THREE.Mesh(
           float f = texture2D(field, vUv).r;
           float w = max(fwidth(f), 1e-5);
           a = smoothstep(threshold - w, threshold + w, f);
+          if (solidOn == 1) a *= projection;
         }
         gl_FragColor = vec4(mix(skyColor, cc * (1.0 - shade), a), mix(skyAlpha, cloudAlpha, a));
         #include <colorspace_fragment>
@@ -628,6 +633,149 @@ layerSurface.visible = false;
 layerSurface.userData.radius = 0;
 scene.add(layerSurface);
 
+// Solid clouds (cumulus.js): spheres, flattened a little, cut flat at the
+// base, lit by the sun from the south-west. Near clouds are drawn with finer
+// spheres than far ones. Looking up into a cut sphere shows its inside: that
+// is the flat, dark base.
+const SUN = toScene(Math.sin(220 * DEG) * Math.cos(40 * DEG), Math.cos(220 * DEG) * Math.cos(40 * DEG), Math.sin(40 * DEG)).normalize();
+const solidUniforms = {
+  litCol: { value: new THREE.Color() },
+  shadeCol: { value: new THREE.Color() },
+  baseCol: { value: new THREE.Color() },
+  hazeCol: { value: new THREE.Color().setRGB(196 / 255, 210 / 255, 228 / 255, THREE.SRGBColorSpace) },
+  sunDir: { value: SUN },
+  metresPerUnit,
+  fade: layerUniforms.layerFade,
+  bumpM: { value: 130 },
+};
+const solidMaterial = new THREE.ShaderMaterial({
+  uniforms: solidUniforms,
+  side: THREE.DoubleSide,
+  transparent: true,
+  vertexShader: `
+    #include <common>
+    #include <logdepthbuf_pars_vertex>
+    attribute float aBase;
+    attribute float aTop;
+    varying vec3 vN, vW;
+    varying float vBase, vTop;
+    void main() {
+      vec4 w = modelMatrix * instanceMatrix * vec4(position, 1.0);
+      vec3 sc = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
+      vN = normalize(normal / sc);
+      vW = w.xyz;
+      vBase = aBase;
+      vTop = aTop;
+      gl_Position = projectionMatrix * viewMatrix * w;
+      #include <logdepthbuf_vertex>
+    }`,
+  fragmentShader: `
+    #include <logdepthbuf_pars_fragment>
+    uniform vec3 litCol, shadeCol, baseCol, hazeCol, sunDir;
+    uniform float metresPerUnit, fade, bumpM;
+    varying vec3 vN, vW;
+    varying float vBase, vTop;
+    // value noise, for the lumpy (cauliflower) surface
+    float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+    float vnoise(vec3 p) {
+      vec3 i = floor(p), f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(mix(hash(i), hash(i + vec3(1, 0, 0)), f.x), mix(hash(i + vec3(0, 1, 0)), hash(i + vec3(1, 1, 0)), f.x), f.y),
+                 mix(mix(hash(i + vec3(0, 0, 1)), hash(i + vec3(1, 0, 1)), f.x), mix(hash(i + vec3(0, 1, 1)), hash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+    }
+    vec3 bumps(vec3 p) {
+      return vec3(vnoise(p), vnoise(p + 17.3), vnoise(p + 41.9)) - 0.5
+        + 0.5 * (vec3(vnoise(p * 2.7 + 5.1), vnoise(p * 2.7 + 23.4), vnoise(p * 2.7 + 61.2)) - 0.5);
+    }
+    void main() {
+      #include <logdepthbuf_fragment>
+      if (vW.y < vBase) discard; // the flat base
+      float h = clamp((vW.y - vBase) / max(vTop - vBase, 1e-9), 0.0, 1.0);
+      vec3 c;
+      if (!gl_FrontFacing) {
+        c = baseCol; // seen through the cut: the base
+      } else {
+        vec3 n = normalize(vN);
+        // cauliflower lumps, fading out where they get too small on screen
+        vec3 bp = vW * metresPerUnit / bumpM;
+        float keep = 1.0 - smoothstep(0.25, 0.8, length(fwidth(bp)));
+        vec3 bmp = bumps(bp);
+        n = normalize(n + 1.3 * keep * bmp);
+        // wrapped diffuse light, so sunlit sides keep their modelling; the
+        // creases between lumps a little darker
+        c = mix(shadeCol, litCol, pow(0.5 + 0.5 * dot(n, sunDir), 1.3));
+        c *= 1.0 - 0.12 * keep * (0.5 - bmp.x - 0.3 * bmp.y);
+        // darker low down and on the undersides
+        c = mix(baseCol, c, smoothstep(0.0, 0.3, h) * (0.55 + 0.45 * smoothstep(-0.8, 0.1, n.y)));
+      }
+      float dist = length(vW) * metresPerUnit;
+      c = mix(c, hazeCol, 0.55 * smoothstep(15000.0, 150000.0, dist));
+      gl_FragColor = vec4(c, fade);
+      #include <colorspace_fragment>
+    }`,
+});
+function solidMesh(detail) {
+  const g = new THREE.IcosahedronGeometry(1, detail);
+  const m = new THREE.InstancedMesh(g, solidMaterial, 1);
+  m.count = 0;
+  m.frustumCulled = false;
+  m.renderOrder = 3;
+  scene.add(m);
+  return m;
+}
+const solidNear = solidMesh(2), solidFar = solidMesh(1);
+// Grows a mesh's instance buffers when more spheres are needed.
+function ensureCapacity(m, n) {
+  if (m.instanceMatrix.count >= n) return m;
+  const cap = Math.ceil(n * 1.3);
+  m.instanceMatrix = new THREE.InstancedBufferAttribute(new Float32Array(cap * 16), 16);
+  m.geometry.setAttribute('aBase', new THREE.InstancedBufferAttribute(new Float32Array(cap), 1));
+  m.geometry.setAttribute('aTop', new THREE.InstancedBufferAttribute(new Float32Array(cap), 1));
+  return m;
+}
+for (const m of [solidNear, solidFar]) {
+  m.geometry.setAttribute('aBase', new THREE.InstancedBufferAttribute(new Float32Array(1), 1));
+  m.geometry.setAttribute('aTop', new THREE.InstancedBufferAttribute(new Float32Array(1), 1));
+}
+let solidState = null; // from cumulus.js solidField
+let solidScale = 0;
+const tmpM = new THREE.Matrix4(), tmpP = new THREE.Vector3(), tmpS = new THREE.Vector3(), tmpQ = new THREE.Quaternion();
+function updateSolidMeshes(show) {
+  solidNear.visible = solidFar.visible = show;
+  if (!show || !solidState) { solidNear.count = solidFar.count = 0; return; }
+  const list = solidSpheres(solidState, solidScale);
+  const near = list.filter((q) => q.detail), far = list.filter((q) => !q.detail);
+  for (const [m, part] of [[solidNear, near], [solidFar, far]]) {
+    ensureCapacity(m, part.length);
+    const base = m.geometry.getAttribute('aBase'), top = m.geometry.getAttribute('aTop');
+    part.forEach((q, i) => {
+      // the icosahedron's faces lie a little inside the unit sphere
+      const f = m === solidNear ? 1.01 : 1.04;
+      tmpP.set(q.e * K, q.up * K, -q.n * K);
+      tmpS.set(q.rh * K * f, q.rv * K * f, q.rh * K * f);
+      tmpM.compose(tmpP, tmpQ, tmpS);
+      m.setMatrixAt(i, tmpM);
+      base.array[i] = q.base * K;
+      top.array[i] = q.top * K;
+    });
+    m.count = part.length;
+    m.instanceMatrix.needsUpdate = true;
+    base.needsUpdate = top.needsUpdate = true;
+  }
+  const look = SOLID_LOOK[activeLayer().type];
+  const set = (u, rgb) => u.value.setRGB(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255, THREE.SRGBColorSpace);
+  set(solidUniforms.litCol, look.lit);
+  set(solidUniforms.shadeCol, look.shade);
+  set(solidUniforms.baseCol, look.base);
+  solidUniforms.bumpM.value = SOLID[activeLayer().type].R0 * 0.09;
+}
+// sunlit tops, shaded sides and bases (sRGB)
+const SOLID_LOOK = {
+  CU: { lit: [252, 252, 253], shade: [198, 204, 214], base: [150, 157, 168] },
+  TCU: { lit: [250, 251, 253], shade: [188, 195, 206], base: [132, 139, 151] },
+  CB: { lit: [238, 241, 246], shade: [158, 165, 178], base: [84, 90, 101] },
+};
+
 // Point the shared layer uniforms at the current layer.
 let layerThreshold = 0;
 const flatType = (code) => !!TYPES[code] && TYPES[code].flat !== false;
@@ -693,7 +841,10 @@ function updatePattern() {
 
 function updateCloudMeshes() {
   const on = layerScene();
-  domeUniforms.layerOn.value = on ? 1 : 0;
+  const solid = on && !!TYPES[activeLayer().type]?.solid;
+  domeUniforms.layerOn.value = on && !solid ? 1 : 0;
+  domeUniforms.solidOn.value = solid ? 1 : 0;
+  updateSolidMeshes(solid);
   if (!on) domeUniforms.cloudColor.value.setRGB(CLOUD[0] / 255, CLOUD[1] / 255, CLOUD[2] / 255, THREE.SRGBColorSpace);
   // The observer's eye is the dome's centre: the figure (to scale, its eye
   // 0.078 units up) stands one eye height below it, as does the ground.
@@ -712,7 +863,7 @@ function updateCloudMeshes() {
   layerSurface.position.y = GROUND_Y + activeLayer().base * K;
   // Clouds with height are drawn on the dome (traced through their height);
   // the flat layer then shows only their bases, from outside.
-  layerSurface.visible = !(layerUniforms.towerOn.value === 1 && view === 'inside');
+  layerSurface.visible = !solid && !(layerUniforms.towerOn.value === 1 && view === 'inside');
 }
 
 // ================================================================ cameras
@@ -1166,12 +1317,29 @@ function recompute() {
     // The GPU draws the layer; the same field here gives the threshold for
     // the chosen octas, the numbers and the sky map. Lines of sight start at
     // the observer's eye, 1.7 m above the ground.
-    layerField({ ...L, octas: shownLayerOctas(), height: Math.max(1, L.base - EYE_M) }, field);
-    layerThreshold = solveThreshold(field, shownLayerOctas() / 8);
-    coveredFrac = coverFromField(field, layerThreshold, cover);
-    // (for clouds with height the sky covered is no longer just their bases)
-    patchArea = TYPES[L.type]?.topM ? 0 : layerArea(cover, Math.max(1, L.base - EYE_M));
-    paintDome(false);
+    const params = { ...L, octas: shownLayerOctas(), height: Math.max(1, L.base - EYE_M) };
+    if (TYPES[L.type]?.solid) {
+      // solid clouds: the field is minus the scale at which each direction
+      // is first covered; the threshold gives the clouds' scale. Where even
+      // the largest clouds cannot cover the amount asked, they cover what
+      // they can, and the numbers say so.
+      solidState = solidField(params, field);
+      let T = solveThreshold(field, shownLayerOctas() / 8);
+      if (!(T > -S_MAX)) T = -S_MAX;
+      solidScale = Number.isFinite(T) ? Math.max(0, -T) : 0;
+      threshold = Number.isFinite(T) ? T : 1;
+      coveredFrac = coverFromField(field, threshold, cover);
+      patchArea = 0;
+      paintDome(true);
+    } else {
+      solidState = null;
+      layerField(params, field);
+      layerThreshold = solveThreshold(field, shownLayerOctas() / 8);
+      coveredFrac = coverFromField(field, layerThreshold, cover);
+      // (for clouds with height the sky covered is no longer just their bases)
+      patchArea = TYPES[L.type]?.topM ? 0 : layerArea(cover, Math.max(1, L.base - EYE_M));
+      paintDome(false);
+    }
     updateCloudMeshes();
   } else {
     const p = shapeParams;
