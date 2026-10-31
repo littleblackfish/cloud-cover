@@ -5,7 +5,7 @@ import {
   reportedOctas, makeNoise3, mulberry32, vertSliceFrame, vertSliceCentre, patchCentre,
 } from './sky.js';
 import {
-  layerField, bakeType, bakeBlotches, prebake, TYPES, TYPE_ROWS,
+  layerField, cloudinessSampler, bakeType, bakeBlotches, prebake, TYPES, TYPE_ROWS,
   BLOTCH_SCALE, BLOTCH_ANGLE, EARTH_R, DECODE_GLSL, TOWER_STEPS,
 } from './layer.js';
 import { solidField, solidSpheres, REACH_MAX, SOLID } from './cumulus.js';
@@ -607,12 +607,14 @@ const SURFACE_FRAG = `
   #include <logdepthbuf_pars_fragment>
   uniform vec3 color;
   uniform float metresPerUnit; // also the dome's radius in metres
+  uniform float nearM; // nearer than this, the clouds are drawn as meshes
   varying vec2 vGround;
   ${LAYER_GLSL}
   void main() {
     #include <logdepthbuf_fragment>
     // the line of sight from the eye to this point of the (curved) layer
     float d = length(vGround);
+    if (d < nearM) discard;
     vec3 s = normalize(vec3(vGround, layerHeight - d * d / 12742000.0));
     float r = region(s), rw = fwidth(r);
     float a = s.z < 0.0 ? 0.0 : layerCloud(r, rw, vGround, dFdx(vGround), dFdy(vGround));
@@ -629,7 +631,7 @@ const SURFACE_FRAG = `
 const layerSurface = new THREE.Mesh(
   new THREE.BufferGeometry(),
   new THREE.ShaderMaterial({
-    uniforms: { ...layerUniforms, metresPerUnit, color: { value: new THREE.Color(0xeef1f5) } },
+    uniforms: { ...layerUniforms, metresPerUnit, nearM: { value: 0 }, color: { value: new THREE.Color(0xeef1f5) } },
     vertexShader: SURFACE_VERT,
     fragmentShader: SURFACE_FRAG,
     side: THREE.DoubleSide,
@@ -661,6 +663,7 @@ const solidUniforms = {
   fade: layerUniforms.layerFade,
   bumpM: { value: 130 },
   lumpM: { value: 200 },
+  sheet: { value: 0 }, // 1 for a sheet (stratocumulus), see the shader
 };
 const solidMaterial = new THREE.ShaderMaterial({
   uniforms: solidUniforms,
@@ -697,7 +700,8 @@ const solidMaterial = new THREE.ShaderMaterial({
       float lump = perlin(w0.xyz * metresPerUnit / lumpM);
       vec4 w = modelMatrix * instanceMatrix * vec4(position * (1.0 + 0.1 * lump), 1.0);
       vec3 sc = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
-      vN = normalize(normal / sc);
+      // the normal of a scaled (and turned) sphere
+      vN = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * (normal / (sc * sc)));
       vW = w.xyz;
       vBase = aBase;
       vTop = aTop;
@@ -707,7 +711,7 @@ const solidMaterial = new THREE.ShaderMaterial({
   fragmentShader: `
     #include <logdepthbuf_pars_fragment>
     uniform vec3 litCol, shadeCol, baseCol, hazeCol, sunDir;
-    uniform float metresPerUnit, fade, bumpM;
+    uniform float metresPerUnit, fade, bumpM, sheet;
     varying vec3 vN, vW;
     varying float vBase, vTop;
     // value noise, for the lumpy (cauliflower) surface
@@ -738,7 +742,10 @@ const solidMaterial = new THREE.ShaderMaterial({
         n = normalize(n + 1.3 * keep * bmp);
         // wrapped diffuse light, so sunlit sides keep their modelling; the
         // creases between lumps a little darker
-        c = mix(shadeCol, litCol, pow(0.5 + 0.5 * dot(n, sunDir), 1.3));
+        float sunlit = pow(0.5 + 0.5 * dot(n, sunDir), 1.3);
+        // in a sheet, the cloud above shades all but its top from the sun
+        sunlit *= mix(1.0, smoothstep(0.55, 1.0, h), sheet);
+        c = mix(shadeCol, litCol, sunlit);
         c *= 1.0 - 0.12 * keep * (0.5 - bmp.x - 0.3 * bmp.y);
         // darker low down and on the undersides
         c = mix(baseCol, c, smoothstep(0.0, 0.3, h) * (0.55 + 0.45 * smoothstep(-0.8, 0.1, n.y)));
@@ -775,10 +782,15 @@ for (const m of [solidNear, solidFar]) {
 let solidState = null; // from cumulus.js solidField
 let solidScale = 0;
 const tmpM = new THREE.Matrix4(), tmpP = new THREE.Vector3(), tmpS = new THREE.Vector3(), tmpQ = new THREE.Quaternion();
+// The solid clouds to draw: cumuliform clouds (cumulus.js), or the near
+// part of a stratocumulus layer (sheetSpheres).
 function updateSolidMeshes(show) {
   solidNear.visible = solidFar.visible = show;
-  if (!show || !solidState) { solidNear.count = solidFar.count = 0; return; }
-  const list = solidSpheres(solidState, solidScale);
+  const type = activeLayer().type;
+  const list = !show ? null
+    : TYPES[type]?.meshNear ? sheetSpheres(activeLayer(), layerThreshold)
+      : solidState ? solidSpheres(solidState, solidScale) : null;
+  if (!list) { solidNear.count = solidFar.count = 0; return; }
   const near = list.filter((q) => q.detail), far = list.filter((q) => !q.detail);
   for (const [m, part] of [[solidNear, near], [solidFar, far]]) {
     ensureCapacity(m, part.length);
@@ -787,7 +799,8 @@ function updateSolidMeshes(show) {
       // the icosahedron's faces lie a little inside the unit sphere
       const f = m === solidNear ? 1.01 : 1.04;
       tmpP.set(q.e * K, q.up * K, -q.n * K);
-      tmpS.set(q.rh * K * f, q.rv * K * f, q.rh * K * f);
+      tmpS.set(q.rh * K * f, q.rv * K * f, (q.rh2 ?? q.rh) * K * f);
+      tmpQ.setFromAxisAngle(Y_AXIS, q.rot ?? 0);
       tmpM.compose(tmpP, tmpQ, tmpS);
       m.setMatrixAt(i, tmpM);
       base.array[i] = q.base * K;
@@ -798,8 +811,55 @@ function updateSolidMeshes(show) {
     base.needsUpdate = top.needsUpdate = true;
   }
   solidLook();
-  solidUniforms.bumpM.value = SOLID[activeLayer().type].R0 * 0.09;
-  solidUniforms.lumpM.value = SOLID[activeLayer().type].R0 * 0.3;
+  const R0 = (SOLID[type] ?? SHEET).R0;
+  solidUniforms.sheet.value = TYPES[type]?.meshNear ? 1 : 0;
+  solidUniforms.bumpM.value = R0 * 0.09;
+  solidUniforms.lumpM.value = R0 * 0.3;
+}
+
+// Stratocumulus near the observer: flattened ellipsoids on a grid lined up
+// with the rolls (across x along, metres), wherever the layer's pattern
+// beats the threshold (layer.js cloudinessSampler), bigger and thicker
+// where it beats it more, so they follow the same rolls and gaps as the
+// pattern drawn beyond them. Out to about 3 degrees above the horizon; the
+// flat pattern takes over from there (see the layer surface's nearM).
+const SHEET = { across: 170, along: 420, thick: 140, nearDeg: 3, maxM: 20000, R0: 400 };
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+const sheetNearM = (L) => Math.min(SHEET.maxM, Math.max(3000, Math.max(1, L.base - EYE_M) / Math.tan(SHEET.nearDeg * DEG)));
+function sheetSpheres(L, T) {
+  const t = TYPES[L.type];
+  const h = Math.max(1, L.base - EYE_M);
+  const near = sheetNearM(L);
+  const at = cloudinessSampler({ ...L, height: h });
+  // the pattern's axes on the ground: across the rolls and along them
+  const ang = t.angle * DEG;
+  const ux = Math.cos(ang), uy = -Math.sin(ang), vx = Math.sin(ang), vy = Math.cos(ang);
+  const na = Math.ceil(near / SHEET.across), nb = Math.ceil(near / SHEET.along);
+  const full = 0.5 * t.amount; // how far past the threshold is full thickness
+  const frac = (v) => v - Math.floor(v);
+  const list = [];
+  for (let i = -na; i <= na; i++) {
+    for (let j = -nb; j <= nb; j++) {
+      const h1 = frac(Math.sin(i * 12.9898 + j * 78.233) * 43758.5453);
+      const h2 = frac(Math.sin(i * 39.3468 + j * 11.135) * 24634.6345);
+      const a = (i + 0.6 * (h1 - 0.5)) * SHEET.across, b = (j + 0.6 * (h2 - 0.5)) * SHEET.along;
+      const x = a * ux + b * vx, y = a * uy + b * vy;
+      const d = Math.hypot(x, y);
+      if (d > near) continue;
+      const c = at(x, y) - T;
+      if (c <= 0) continue;
+      const th = Math.min(1, c / full);
+      const up = h - (d * d) / (2 * EARTH_R);
+      const rv = SHEET.thick * (0.35 + 0.9 * th);
+      const grow = 0.75 + 0.45 * th;
+      list.push({
+        e: x, n: y, up: up + 0.45 * rv,
+        rh: 0.8 * SHEET.across * grow, rh2: 0.75 * SHEET.along * grow, rv,
+        base: up, top: up + 2 * SHEET.thick, detail: true, rot: -ang,
+      });
+    }
+  }
+  return list;
 }
 // The solid clouds' colours: the type's, with the sunlit side warmer and
 // everything a little dimmer when the sun is low.
@@ -820,6 +880,7 @@ const SOLID_LOOK = {
   CU: { lit: [252, 252, 253], shade: [198, 204, 214], base: [150, 157, 168] },
   TCU: { lit: [250, 251, 253], shade: [188, 195, 206], base: [132, 139, 151] },
   CB: { lit: [238, 241, 246], shade: [158, 165, 178], base: [84, 90, 101] },
+  SC: { lit: [236, 239, 244], shade: [176, 182, 193], base: [140, 147, 158] },
 };
 
 // Point the shared layer uniforms at the current layer.
@@ -888,9 +949,12 @@ function updatePattern() {
 function updateCloudMeshes() {
   const on = layerScene();
   const solid = on && !!TYPES[activeLayer().type]?.solid;
+  const meshNear = on && !!TYPES[activeLayer().type]?.meshNear;
   domeUniforms.layerOn.value = on && !solid ? 1 : 0;
   domeUniforms.solidOn.value = solid ? 1 : 0;
-  updateSolidMeshes(solid);
+  updateSolidMeshes(solid || meshNear);
+  // where the near clouds are meshes, the flat layer starts beyond them
+  layerSurface.material.uniforms.nearM.value = meshNear ? sheetNearM(activeLayer()) : 0;
   if (!on) domeUniforms.cloudColor.value.setRGB(CLOUD[0] / 255, CLOUD[1] / 255, CLOUD[2] / 255, THREE.SRGBColorSpace);
   // The observer's eye is the dome's centre: the figure (to scale, its eye
   // 0.078 units up) stands one eye height below it, as does the ground.

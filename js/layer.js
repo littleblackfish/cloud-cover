@@ -179,6 +179,7 @@ const mixRGB = (a, b, t) => a.map((v, i) => Math.round(lerp(v, b[i], t)));
 //   profile  the power in the profile: 2 domes, higher steeper-sided towers
 //   anvil    how far the top spreads out
 //   solid    drawn as solid shapes instead: cumulus.js
+//   meshNear drawn as solid shapes near the observer, the pattern beyond
 export const TYPES = {
   CI: {
     name: 'Cirrus', etage: 'high', baseFt: 29000, baseRangeFt: [20000, 39000],
@@ -280,6 +281,8 @@ export const TYPES = {
     name: 'Stratocumulus', etage: 'low', baseFt: 3500, baseRangeFt: [500, 6500],
     tileM: 10000, featureM: 300, amount: 0.7, blotch: 0.35, soft: 0.04,
     opacity: 0.96, wisp: 0.08, grey: [214, 218, 224], shade: 0.5, angle: 20, res: 512,
+    // near the observer, drawn as solid rolls (main.js sheetSpheres)
+    meshNear: true,
     help: 'Grey or whitish patches or sheets of rounded masses or rolls, with dark parts; elements over three fingers wide. Base 500–6,500 ft.',
     gen(u, v, s) {
       // rolls in rows across the wind (about 300 m apart, a km or two long),
@@ -481,6 +484,32 @@ export function layerField(params, out) {
     }
   }
   return out;
+}
+
+// Cloudiness at a point of the layer (x east, y north, metres from the
+// observer), as for a direction in layerField: the patch's field toward
+// that point plus the type's pattern there. For clouds drawn as meshes near
+// the observer (stratocumulus): they sit where this beats the threshold.
+export function cloudinessSampler(params) {
+  const t = TYPES[params.type];
+  const tile = bakeType(params.type, params.seed);
+  const blot = bakeBlotches(params.seed);
+  const ca = Math.cos(t.angle * Math.PI / 180), sa = Math.sin(t.angle * Math.PI / 180);
+  const cb = Math.cos(BLOTCH_ANGLE * Math.PI / 180), sb = Math.sin(BLOTCH_ANGLE * Math.PI / 180);
+  const blotchM = t.tileM * BLOTCH_SCALE;
+  const [a0, e0] = patchCentre(params.azimuth, params.elevation);
+  const px = Math.sin(a0) * Math.cos(e0), py = Math.cos(a0) * Math.cos(e0), pz = Math.sin(e0);
+  const h0 = params.height;
+  return (x, y) => {
+    const d2 = x * x + y * y;
+    const up = h0 - d2 / (2 * EARTH_R);
+    const dot = (x * px + y * py + up * pz) / Math.sqrt(d2 + up * up);
+    const r = -Math.acos(Math.max(-1, Math.min(1, dot)));
+    const qx = ca * x - sa * y, qy = sa * x + ca * y;
+    const bx = cb * qx - sb * qy, by = sb * qx + cb * qy;
+    return r + t.amount * sampleCover(tile, qx / t.tileM, qy / t.tileM) +
+      t.blotch * sampleCover(blot, bx / blotchM, by / blotchM);
+  };
 }
 
 // Clouds with height. A cloud element rises above the base where its

@@ -27,7 +27,9 @@ and is hosted on GitHub Pages without a build step.
   CB are solid 3D clouds (clusters of lumpy spheres with flat bases, lit by
   the sun; see js/cumulus.js): coverage is set by growing every cloud from
   its base, solved exactly per sky direction, so toward the horizon their
-  sides fill the gaps. ACC has turrets traced through their height. Picking a
+  sides fill the gaps. Near the observer (out to about 3° above the horizon), SC is drawn
+  as solid rolls lined up with its pattern, which takes over beyond. ACC has
+  turrets traced through their height. Picking a
   type moves the layer to its usual base (the median reported in Canadian
   METARs, 2023–24; its description gives the reported range and amounts), and the base slider covers the
   type's range; the étage follows from the base. Bases, base ranges and
