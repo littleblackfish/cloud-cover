@@ -432,7 +432,8 @@ scene.add(groundLayer);
 // A common frame for both tabs, beyond the observer's own horizon:
 //
 // The rest of the planet: the ground carries on past the horizon, curving
-// away below it, drawn faintly out to PLANET_M.
+// away below it, out to PLANET_M. It looks the same as the ground inside:
+// the horizon is the observer's, and the dome already marks it.
 //
 // FAR_M is a cutoff, not drawn: cloud-layer clouds farther than this from the
 // observer are drawn only as a trace. They sit within about a degree of the
@@ -452,7 +453,7 @@ function curvedRing(r0, r1, segments, rings) {
 }
 const planet = new THREE.Mesh(
   curvedRing(REACH, PLANET_M * K, 192, 96),
-  new THREE.MeshBasicMaterial({ color: 0x3a4a36, transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide }),
+  groundMaterial,
 );
 planet.position.y = GROUND_Y;
 scene.add(planet);
